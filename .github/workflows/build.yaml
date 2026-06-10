@@ -42,6 +42,6 @@ jobs:
       grype: true
       security_scan_mode: report-only
       summary_artifacts: true
-      # renovate: datasource=github-releases depName=kairos-io/AuroraBoot
-      auroraboot_version: v0.22.0
-      custom_job_name_format: validate-$ARCH
+      # renovate: datasource=docker depName=quay.io/kairos/auroraboot
+      auroraboot_version: v0.21.2
+      custom_job_name_format: validate

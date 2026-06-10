@@ -55,10 +55,12 @@ RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
 # os-release ID/ID_LIKE stay openSUSE so package logic keeps working.
 # PRETTY_NAME is what kubelet reports as the node OS image.
 ARG BASE_IMAGE
-RUN . /etc/os-release && \
+# NB: source os-release in a subshell — it defines its own VERSION and would
+# otherwise clobber the VERSION build arg.
+RUN BASE_PRETTY="$(. /etc/os-release && echo "${PRETTY_NAME}")" && \
     sed -i --follow-symlinks \
         -e 's/^NAME=.*/NAME="SheepOS"/' \
-        -e "s/^PRETTY_NAME=.*/PRETTY_NAME=\"SheepOS ${VERSION} (${PRETTY_NAME}, Kairos)\"/" \
+        -e "s/^PRETTY_NAME=.*/PRETTY_NAME=\"SheepOS ${VERSION} (${BASE_PRETTY}, Kairos)\"/" \
         /etc/os-release && \
     printf '%s\n' \
         "SHEEPOS_VERSION=\"${VERSION}\"" \

@@ -120,6 +120,6 @@ docker build -t sheepos:dev --build-arg VERSION=v0.0.0-dev -f images/Dockerfile 
 
 # optional: turn it into a bootable ISO
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$PWD/artifacts:/output" quay.io/kairos/auroraboot:v0.22.0 \
+  -v "$PWD/artifacts:/output" quay.io/kairos/auroraboot:v0.21.2 \
   build-iso --output /output/ docker:sheepos:dev
 ```

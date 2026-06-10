@@ -60,6 +60,10 @@ jobs:
           push: true
           sbom: true
           tags: ghcr.io/new-pluto/sheepos:${{ github.ref_name }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/New-Pluto/sheepos
+            org.opencontainers.image.description=SheepOS — Kairos node OS for sheepnet (openSUSE Leap + k3s)
+            org.opencontainers.image.version=${{ github.ref_name }}
           build-args: |
             VERSION=${{ github.ref_name }}
 
@@ -104,6 +108,6 @@ jobs:
       grype: true
       security_scan_mode: report-only
       summary_artifacts: true
-      # renovate: datasource=github-releases depName=kairos-io/AuroraBoot
-      auroraboot_version: v0.22.0
-      custom_job_name_format: release-$ARCH
+      # renovate: datasource=docker depName=quay.io/kairos/auroraboot
+      auroraboot_version: v0.21.2
+      custom_job_name_format: release
