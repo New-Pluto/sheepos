@@ -1,0 +1,109 @@
+# Release pipeline — runs on every v* tag and publishes everything a release
+# means for SheepOS:
+#
+#   1. oci:      build the SheepOS image once per arch (images/Dockerfile) and
+#                push ghcr.io/new-pluto/sheepos:<tag>-{amd64,arm64}.
+#                This job pushes with GITHUB_TOKEN — the factory job below
+#                cannot (its reusable workflow omits packages:write), which is
+#                why the build is split this way.
+#   2. manifest: stitch the per-arch images into the multi-arch tags
+#                :<tag> and :latest (the upgrade source nodes pull).
+#   3. iso:      Kairos Factory repackages the *pushed* per-arch image
+#                (images/Dockerfile.release passthrough) into a bootable ISO,
+#                and uploads ISO + .sha256 to the GitHub release for the tag.
+#                ISO filename comes from /etc/kairos-release and looks like
+#                kairos-opensuse-leap-16.0-standard-amd64-generic-v0.1.0-k3sv1.36.0+k3s1.iso
+#                — sheepnet parses the k3s version out of that name, keep it.
+#
+# Cut a release with:  git tag v0.1.0 && git push origin v0.1.0
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  actions: read
+  security-events: write
+  id-token: write
+
+jobs:
+  oci:
+    name: oci-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push SheepOS image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: images/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          sbom: true
+          tags: ghcr.io/new-pluto/sheepos:${{ github.ref_name }}-${{ matrix.arch }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+
+  manifest:
+    name: multi-arch manifest
+    needs: oci
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Login to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create multi-arch tags
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/new-pluto/sheepos:${{ github.ref_name }} \
+            --tag ghcr.io/new-pluto/sheepos:latest \
+            ghcr.io/new-pluto/sheepos:${{ github.ref_name }}-amd64 \
+            ghcr.io/new-pluto/sheepos:${{ github.ref_name }}-arm64
+
+  iso:
+    name: iso-${{ matrix.arch }}
+    needs: oci
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    uses: kairos-io/kairos-factory-action/.github/workflows/reusable-factory.yaml@v1.1.1
+    with:
+      dockerfile_path: images/Dockerfile.release
+      base_image: ghcr.io/new-pluto/sheepos:${{ github.ref_name }}-${{ matrix.arch }}
+      arch: ${{ matrix.arch }}
+      model: generic
+      version: ${{ github.ref_name }}
+      iso: true
+      release: true
+      list_release_artifacts: true
+      grype: true
+      security_scan_mode: report-only
+      summary_artifacts: true
+      # renovate: datasource=github-releases depName=kairos-io/AuroraBoot
+      auroraboot_version: v0.22.0
+      custom_job_name_format: release-$ARCH

@@ -1,0 +1,12 @@
+# Passthrough Dockerfile used only by the release workflow's ISO jobs.
+#
+# The release pipeline builds the SheepOS image exactly once (images/Dockerfile,
+# pushed to ghcr.io/new-pluto/sheepos). The Kairos Factory Action then gets THIS
+# file with base_image pointing at that pushed per-arch image, so the ISO it
+# packages is bit-identical to the published OCI upgrade source — netbooted
+# nodes and in-place-upgraded nodes run the same build.
+#
+# The factory passes extra build args (MODEL, KUBERNETES_*, VERSION, ...);
+# they are intentionally unused here and only produce buildx warnings.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}

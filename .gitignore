@@ -1,0 +1,8 @@
+# Local build output
+artifacts/
+build/
+*.iso
+*.iso.sha256
+
+# Claude Code project instructions (workspace-local, like in sheepnet)
+CLAUDE.md

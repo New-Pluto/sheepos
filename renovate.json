@@ -1,0 +1,38 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Keeps the SheepOS pipeline in sync with kairos-init, the Kairos Factory Action, AuroraBoot, openSUSE and k3s. Built-in managers cover Dockerfile FROM lines and workflow `uses:` refs; the custom managers below cover pins that live in ARG defaults / workflow inputs. If Renovate is enabled on the org, delete .github/dependabot.yml to avoid duplicate PRs.",
+  "extends": ["config:recommended"],
+  "labels": ["dependencies"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Version pins annotated with '# renovate: datasource=... depName=...' (k3s in images/Dockerfile, auroraboot_version in workflows)",
+      "managerFilePatterns": ["/^images\\/Dockerfile$/", "/^\\.github\\/workflows\\/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)\\n[^\\n]*?[=:] ?\"?(?<currentValue>v?[0-9][^\\s\"]*)\"?"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Container image pins annotated with '# renovate: docker-image' (openSUSE base in images/Dockerfile ARG default and build.yaml base_image input)",
+      "managerFilePatterns": ["/^images\\/Dockerfile$/", "/^\\.github\\/workflows\\/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: docker-image\\n[^\\n]*?[=:] ?(?<depName>[a-z0-9./-]+):(?<currentValue>[A-Za-z0-9._-]+)"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["k3s-io/k3s"],
+      "versioning": "semver-coerced",
+      "description": "k3s tags carry +k3sN build metadata; coerce for ordering. Keep within the minor the cluster supports before merging."
+    },
+    {
+      "matchDepNames": ["opensuse/leap"],
+      "matchUpdateTypes": ["major", "minor"],
+      "dependencyDashboardApproval": true,
+      "description": "New Leap releases change the userland — opt in deliberately instead of auto-PRing."
+    }
+  ]
+}
