@@ -28,7 +28,7 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     name: sheepos-${{ matrix.arch }}
-    uses: kairos-io/kairos-factory-action/.github/workflows/reusable-factory.yaml@v1.1.1
+    uses: kairos-io/kairos-factory-action/.github/workflows/reusable-factory.yaml@v1.1.2
     with:
       dockerfile_path: images/Dockerfile
       # Keep in sync with the ARG BASE_IMAGE default in images/Dockerfile
