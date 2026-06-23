@@ -8,9 +8,11 @@ released entirely on GitHub via the
 
 This repo exists to own the node image supply chain: every byte that boots on a
 sheep node is built from `images/Dockerfile` in CI, published as a versioned
-GitHub release (ISOs for netboot) and OCI image (for in-place upgrades), and
-can carry SheepOS-specific customizations (the first one: early-loading Intel
-microcode baked into the initrd, see `images/Dockerfile`).
+GitHub release (ISOs for netboot) and OCI image (for in-place upgrades). The
+image is **slimmed to a minimal immutable runtime** — no package manager, no rpm
+database, and none of the kernel firmware/microcode these wired x86 nodes never
+load — roughly half the size of a stock build, so two A/B slots fit a small
+`COS_STATE` partition (see the slim step in `images/Dockerfile`).
 
 | | |
 |---|---|
@@ -45,6 +47,11 @@ Pull requests run `.github/workflows/build.yaml` — the same factory pipeline
 (image + ISO + Grype CVE report) for both arches, publishing nothing. Green PR
 ⇒ the release will build.
 
+> **Supply-chain note:** the slim step deletes the rpm database, so the attached
+> SBOM and the Grype CVE report currently come up **empty** (both read the rpm
+> package inventory). To keep them, either retain `/usr/lib/sysimage/rpm` in the
+> slim step, or run the scan in CI *before* stripping.
+
 ## Using a release with sheepnet
 
 ### Netboot / (re)provision
@@ -70,14 +77,14 @@ sudo reboot
 ```
 
 State (`/var/lib/longhorn`, `/var/lib/rancher`, `/oem`) is preserved; the
-passive partition keeps the previous image as rollback. For the one-time
-migration from the current `kairos-hadron` image add `--force` (SheepOS
-versions restart at v0.x, which the upgrade checker would otherwise consider
-a downgrade from hadron's v4.x) — or simply reprovision via netboot.
+passive partition keeps the previous image as rollback. No `--force` is needed
+even for the one-time migration off the older `kairos-hadron` image — current
+`kairos-agent upgrade --source oci:` performs no version/downgrade check.
 
-Later this can become hands-off with Kairos' system-upgrade-controller plan
-pointed at `:latest` (deliberately not enabled while the freeze issue from the
-2026-06-09 audit is open — OS rollouts should stay supervised for now).
+This can become hands-off with the Kairos Operator (`NodeOpUpgrade`) or a Rancher
+system-upgrade-controller Plan (Kairos ships `/usr/sbin/suc-upgrade` for it),
+`concurrency: 1`, one node at a time. Keep OS rollouts supervised while the
+silent-freeze issue is open. See the sheepnet runbook `docs/sheepos-migration.md`.
 
 ## Keeping it up to date
 
@@ -104,11 +111,12 @@ ideally match what the cluster is being upgraded to.
 
 Edit `images/Dockerfile`:
 
-- **Packages that must land in the initrd** (microcode, storage/net drivers):
-  install them *before* the kairos-init `RUN` (dracut builds the initrd during
-  `-s init`).
+- **Packages that must land in the initrd** (storage/net drivers; microcode for
+  newer CPUs): install them *before* the kairos-init `RUN` (dracut builds the
+  initrd during `-s init`).
 - **Everything else** (tools, configs baked into the image): add layers *after*
-  kairos-init, before the branding layer.
+  kairos-init but **before the final slim step** (which deletes the package
+  manager, so it must stay last).
 - **Per-cluster/node config** (k3s args, users, watchdog, network) does **not**
   belong here — that stays in sheepnet's cloud-config templates and `/oem`.
   SheepOS is the generic OS; sheepnet is the cluster personality.
