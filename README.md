@@ -117,7 +117,7 @@ Edit `images/Dockerfile`:
 - **Everything else** (tools, configs baked into the image): add layers *after*
   kairos-init but **before the final slim step** (which deletes the package
   manager, so it must stay last).
-- **Per-cluster/node config** (k3s args, users, watchdog, network) does **not**
+- **Per-cluster/node config** (k3s args, users, network) does **not**
   belong here — that stays in sheepnet's cloud-config templates and `/oem`.
   SheepOS is the generic OS; sheepnet is the cluster personality.
 
