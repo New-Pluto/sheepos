@@ -19,7 +19,7 @@
 # renovate: docker-image
 ARG BASE_IMAGE=opensuse/leap:16.0
 
-FROM quay.io/kairos/kairos-init:v0.15.0 AS kairos-init
+FROM quay.io/kairos/kairos-init:v0.15.2 AS kairos-init
 
 FROM ${BASE_IMAGE}
 
