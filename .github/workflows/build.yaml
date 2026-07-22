@@ -1,6 +1,6 @@
 # PR / main validation: run the full Kairos Factory pipeline (image build +
 # ISO generation + CVE report) for both architectures, without publishing
-# anything. This is the gate that keeps kairos-init / factory / openSUSE bumps
+# anything. This is the gate that keeps kairos-init / factory / Ubuntu bumps
 # from ever landing broken: if this is green, a release tag will build.
 name: build
 
@@ -34,7 +34,7 @@ jobs:
       # Keep in sync with the ARG BASE_IMAGE default in images/Dockerfile
       # (that default is what release builds use).
       # renovate: docker-image
-      base_image: opensuse/leap:16.0
+      base_image: ubuntu:26.04
       arch: ${{ matrix.arch }}
       model: generic
       version: auto # git describe — fine for validation builds

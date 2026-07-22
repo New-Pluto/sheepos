@@ -1,7 +1,7 @@
 # SheepOS
 
 Custom immutable node OS for the [sheepnet](https://github.com/justup2002/sheepnet)
-cluster — openSUSE Leap, kairosified with
+cluster — Ubuntu, kairosified with
 [kairos-init](https://github.com/kairos-io/kairos-init), k3s bundled, built and
 released entirely on GitHub via the
 [Kairos Factory Action](https://github.com/kairos-io/kairos-factory-action).
@@ -9,18 +9,18 @@ released entirely on GitHub via the
 This repo exists to own the node image supply chain: every byte that boots on a
 sheep node is built from `images/Dockerfile` in CI, published as a versioned
 GitHub release (ISOs for netboot) and OCI image (for in-place upgrades). The
-image is **slimmed to a minimal immutable runtime** — no package manager, no rpm
+image is **slimmed to a minimal immutable runtime** — no package manager, no dpkg
 database, and none of the kernel firmware/microcode these wired x86 nodes never
-load — roughly half the size of a stock build, so two A/B slots fit a small
+load — hundreds of MB smaller than a stock build, so two A/B slots fit a small
 `COS_STATE` partition (see the slim step in `images/Dockerfile`).
 
 | | |
 |---|---|
-| Base OS | openSUSE Leap 16.0 |
+| Base OS | Ubuntu 26.04 LTS |
 | Kubernetes | k3s `v1.36.0+k3s1` (pinned in `images/Dockerfile`) |
 | Architectures | amd64, arm64 |
 | Boot model | Kairos A/B immutable, `/etc` rebuilt each boot, config via `/oem` |
-| ISO (per release) | `kairos-opensuse-leap-16.0-standard-<arch>-generic-<tag>-k3sv1.36.0+k3s1.iso` |
+| ISO (per release) | `kairos-ubuntu-26.04-standard-<arch>-generic-<tag>-k3sv1.36.0+k3s1.iso` |
 | OCI image | `ghcr.io/new-pluto/sheepos:<tag>` (multi-arch), `:<tag>-amd64`, `:<tag>-arm64`, `:latest` |
 
 ## How a release works
@@ -47,10 +47,11 @@ Pull requests run `.github/workflows/build.yaml` — the same factory pipeline
 (image + ISO + Grype CVE report) for both arches, publishing nothing. Green PR
 ⇒ the release will build.
 
-> **Supply-chain note:** the slim step deletes the rpm database, so the attached
-> SBOM and the Grype CVE report currently come up **empty** (both read the rpm
-> package inventory). To keep them, either retain `/usr/lib/sysimage/rpm` in the
-> slim step, or run the scan in CI *before* stripping.
+> **Supply-chain note:** the slim step deletes the dpkg database
+> (`/var/lib/dpkg`), so the attached SBOM and the Grype CVE report currently come
+> up **empty** (both read the dpkg package inventory). To keep them, either
+> retain `/var/lib/dpkg` in the slim step, or run the scan in CI *before*
+> stripping.
 
 ## Using a release with sheepnet
 
@@ -61,7 +62,7 @@ Point `config.yaml` at the release ISO (sheepnet downloads it, verifies the
 
 ```yaml
 kairos:
-  iso_url: "https://github.com/New-Pluto/sheepos/releases/download/v0.1.0/kairos-opensuse-leap-16.0-standard-amd64-generic-v0.1.0-k3sv1.36.0+k3s1.iso"
+  iso_url: "https://github.com/New-Pluto/sheepos/releases/download/v0.2.0/kairos-ubuntu-26.04-standard-amd64-generic-v0.2.0-k3sv1.36.0+k3s1.iso"
 ```
 
 Keep the `k3sv<version>` part of the filename intact — sheepnet parses it to
@@ -72,7 +73,7 @@ enforce Cilium/k3s compatibility.
 On a node (one at a time, wait for Ready between nodes):
 
 ```bash
-sudo kairos-agent upgrade --source oci:ghcr.io/new-pluto/sheepos:v0.1.0
+sudo kairos-agent upgrade --source oci:ghcr.io/new-pluto/sheepos:v0.2.0
 sudo reboot
 ```
 
@@ -95,14 +96,14 @@ validates them end-to-end (both arches, full ISO build) before merge:
 |---|---|---|
 | kairos-init | `FROM quay.io/kairos/kairos-init:vX` in `images/Dockerfile` | Dependabot + Renovate |
 | Kairos Factory Action | `uses: ...reusable-factory.yaml@vX` in both workflows | Dependabot + Renovate |
-| openSUSE Leap | `ARG BASE_IMAGE` default in `images/Dockerfile` **and** `base_image:` in `build.yaml` (keep in sync) | Renovate (`# renovate: docker-image`) |
+| Ubuntu | `ARG BASE_IMAGE` default in `images/Dockerfile` **and** `base_image:` in `build.yaml` (keep in sync) | Renovate (`# renovate: docker-image`) |
 | k3s | `ARG K3S_VERSION` in `images/Dockerfile` | Renovate (`# renovate:` annotation) |
 | AuroraBoot | `auroraboot_version:` in both workflows | Renovate (`# renovate:` annotation) |
 
 Dependabot works out of the box; `renovate.json` adds full coverage if the
 Renovate app is installed on the org (then delete `.github/dependabot.yml`).
 
-openSUSE security patches need no pin change at all — packages are fetched at
+Ubuntu security patches need no pin change at all — packages are fetched at
 build time, so **cut a release roughly monthly** (or after a relevant CVE) to
 pick them up. k3s bumps must respect sheepnet's Cilium compatibility floor and
 ideally match what the cluster is being upgraded to.
