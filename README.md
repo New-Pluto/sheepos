@@ -9,10 +9,21 @@ released entirely on GitHub via the
 This repo exists to own the node image supply chain: every byte that boots on a
 sheep node is built from `images/Dockerfile` in CI, published as a versioned
 GitHub release (ISOs for netboot) and OCI image (for in-place upgrades). The
-image is **slimmed to a minimal immutable runtime** — no package manager, no dpkg
-database, and none of the kernel firmware/microcode these wired x86 nodes never
-load — hundreds of MB smaller than a stock build, so two A/B slots fit a small
-`COS_STATE` partition (see the slim step in `images/Dockerfile`).
+image is **slimmed to a minimal immutable runtime**, mostly at *install* time:
+only the firmware packages the fleet's two machine classes actually need are
+installed (Ubuntu's split `linux-firmware-*` vendor packages + dpkg path
+filters trim them to the exact keep-set — Panther Lake `xe/` + `i915/xe3*`,
+Skylake `i915/skl_dmc*`, Realtek `rtl_nic/`), whole kernel-module classes
+that can't matter on wired x86 k3s nodes are never written to disk, and the
+final layer removes the package manager and the dpkg database entirely.
+Upgrades are whole-image A/B swaps, so none of that is needed at runtime.
+An in-place upgrade peaks at **three** image slots on the 2.4 GB `COS_STATE`
+partition (active + passive + transition), so self-sustaining A/B needs each
+ext2 slot ≤ ~816 MiB — the build fails if the rootfs exceeds 720 MB
+(≈ 800 MiB/slot with measured ext2 overhead), keeping that guarantee
+mechanical rather than aspirational. Measured at merge time: ~660 MB rootfs
+→ ~740 MiB/slot, smaller than the openSUSE image it replaces (733 MiB) while
+adding MS-03 hardware support.
 
 | | |
 |---|---|
@@ -48,10 +59,13 @@ Pull requests run `.github/workflows/build.yaml` — the same factory pipeline
 ⇒ the release will build.
 
 > **Supply-chain note:** the slim step deletes the dpkg database
-> (`/var/lib/dpkg`), so the attached SBOM and the Grype CVE report currently come
-> up **empty** (both read the dpkg package inventory). To keep them, either
-> retain `/var/lib/dpkg` in the slim step, or run the scan in CI *before*
-> stripping.
+> (`/var/lib/dpkg`), but SBOM/CVE coverage does **not** go dark: Ubuntu 26.04
+> stamps ELF binaries with systemd `.note.package` metadata, which syft/Grype
+> read directly (~190 source-named OS packages, plus full Go-module and
+> kernel coverage). Grype results are byte-identical with or without the dpkg
+> DB. The scan stays `report-only`: its Critical findings are NVD kernel-CPE
+> matches against `/boot/vmlinuz` produced by `--add-cpes-if-none` —
+> unactionable noise that would permanently fail an enforcing gate.
 
 ## Using a release with sheepnet
 
@@ -96,7 +110,7 @@ validates them end-to-end (both arches, full ISO build) before merge:
 |---|---|---|
 | kairos-init | `FROM quay.io/kairos/kairos-init:vX` in `images/Dockerfile` | Dependabot + Renovate |
 | Kairos Factory Action | `uses: ...reusable-factory.yaml@vX` in both workflows | Dependabot + Renovate |
-| Ubuntu | `ARG BASE_IMAGE` default in `images/Dockerfile` **and** `base_image:` in `build.yaml` (keep in sync) | Renovate (`# renovate: docker-image`) |
+| Ubuntu | `ARG BASE_IMAGE` default in `images/Dockerfile` (single source of truth — `build.yaml` reads the ARG at runtime) | Renovate (`# renovate: docker-image`) |
 | k3s | `ARG K3S_VERSION` in `images/Dockerfile` | Renovate (`# renovate:` annotation) |
 | AuroraBoot | `auroraboot_version:` in both workflows | Renovate (`# renovate:` annotation) |
 
@@ -112,12 +126,15 @@ ideally match what the cluster is being upgraded to.
 
 Edit `images/Dockerfile`:
 
-- **Packages that must land in the initrd** (storage/net drivers; microcode for
-  newer CPUs): install them *before* the kairos-init `RUN` (dracut builds the
-  initrd during `-s init`).
+- **Packages that must land in the initrd** (storage/net drivers; firmware):
+  install them *before* the kairos-init `RUN` (dracut builds the initrd during
+  `-s init`), and check the dpkg path filters at the top don't exclude their
+  files — new hardware usually means adding a `path-include=` line (firmware)
+  or removing a module-class `path-exclude=` line.
 - **Everything else** (tools, configs baked into the image): add layers *after*
   kairos-init but **before the final slim step** (which deletes the package
-  manager, so it must stay last).
+  manager, so it must stay last). Watch the size budget assert — it exists so
+  the A/B upgrade path on the 2.4 GB `COS_STATE` never regresses.
 - **Per-cluster/node config** (k3s args, users, network) does **not**
   belong here — that stays in sheepnet's cloud-config templates and `/oem`.
   SheepOS is the generic OS; sheepnet is the cluster personality.

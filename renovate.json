@@ -14,7 +14,7 @@
     },
     {
       "customType": "regex",
-      "description": "Container image pins annotated with '# renovate: docker-image' (Ubuntu base in images/Dockerfile ARG default and build.yaml base_image input)",
+      "description": "Container image pins annotated with '# renovate: docker-image' (Ubuntu base in the images/Dockerfile ARG default — the single source of truth; build.yaml reads the ARG at runtime)",
       "managerFilePatterns": ["/^images\\/Dockerfile$/", "/^\\.github\\/workflows\\/.+\\.ya?ml$/"],
       "matchStrings": [
         "# renovate: docker-image\\n[^\\n]*?[=:] ?(?<depName>[a-z0-9./-]+):(?<currentValue>[A-Za-z0-9._-]+)"
@@ -30,11 +30,13 @@
     },
     {
       "matchDepNames": ["ubuntu"],
+      "matchDatasources": ["docker"],
       "allowedVersions": "/^\\d*[02468]\\.04$/",
-      "description": "Only LTS tags (.04 of even years), never interim releases like 26.10 or 27.04. Renovate forbids allowedVersions and matchUpdateTypes in the same rule, hence the split."
+      "description": "Only LTS tags (.04 of even years), never interim releases like 26.10 or 27.04. Renovate forbids allowedVersions and matchUpdateTypes in the same rule, hence the split. Scoped to the docker datasource so the rule never touches the github-runners 'ubuntu' dep extracted from runs-on: lines."
     },
     {
       "matchDepNames": ["ubuntu"],
+      "matchDatasources": ["docker"],
       "matchUpdateTypes": ["major", "minor"],
       "dependencyDashboardApproval": true,
       "description": "New Ubuntu releases change the userland — opt in deliberately instead of auto-PRing."

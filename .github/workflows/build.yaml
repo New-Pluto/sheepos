@@ -22,7 +22,28 @@ permissions:
   id-token: write
 
 jobs:
+  # The factory's reusable workflow always injects its base_image input as
+  # BASE_IMAGE, so the ARG default in images/Dockerfile — the value the
+  # release oci job actually builds with — would never be exercised by this
+  # gate if we passed a second literal here. Read the ARG instead: one source
+  # of truth, and a green PR really validates the bytes a release would ship.
+  base-image:
+    name: base image pin
+    runs-on: ubuntu-24.04
+    outputs:
+      base_image: ${{ steps.arg.outputs.base_image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Read ARG BASE_IMAGE from images/Dockerfile
+        id: arg
+        run: |
+          base="$(sed -n 's/^ARG BASE_IMAGE=//p' images/Dockerfile)"
+          test -n "$base"
+          echo "base_image=$base" >> "$GITHUB_OUTPUT"
+
   validate:
+    needs: base-image
     strategy:
       fail-fast: false
       matrix:
@@ -31,10 +52,7 @@ jobs:
     uses: kairos-io/kairos-factory-action/.github/workflows/reusable-factory.yaml@v1.1.1
     with:
       dockerfile_path: images/Dockerfile
-      # Keep in sync with the ARG BASE_IMAGE default in images/Dockerfile
-      # (that default is what release builds use).
-      # renovate: docker-image
-      base_image: ubuntu:26.04
+      base_image: ${{ needs.base-image.outputs.base_image }}
       arch: ${{ matrix.arch }}
       model: generic
       version: auto # git describe — fine for validation builds
