@@ -12,10 +12,10 @@
 #                (images/Dockerfile.release passthrough) into a bootable ISO,
 #                and uploads ISO + .sha256 to the GitHub release for the tag.
 #                ISO filename comes from /etc/kairos-release and looks like
-#                kairos-opensuse-leap-16.0-standard-amd64-generic-v0.1.0-k3sv1.36.0+k3s1.iso
+#                kairos-ubuntu-26.04-standard-amd64-generic-v0.2.0-k3sv1.36.0+k3s1.iso
 #                — sheepnet parses the k3s version out of that name, keep it.
 #
-# Cut a release with:  git tag v0.1.0 && git push origin v0.1.0
+# Cut a release with:  git tag v0.2.0 && git push origin v0.2.0
 
 name: release
 
@@ -62,7 +62,7 @@ jobs:
           tags: ghcr.io/new-pluto/sheepos:${{ github.ref_name }}-${{ matrix.arch }}
           labels: |
             org.opencontainers.image.source=https://github.com/New-Pluto/sheepos
-            org.opencontainers.image.description=SheepOS — Kairos node OS for sheepnet (openSUSE Leap + k3s)
+            org.opencontainers.image.description=SheepOS — Kairos node OS for sheepnet (Ubuntu + k3s)
             org.opencontainers.image.version=${{ github.ref_name }}
           build-args: |
             VERSION=${{ github.ref_name }}

@@ -3,7 +3,7 @@
 #   - docker:         bumps the kairos-init FROM pin in images/Dockerfile
 #
 # Dependabot cannot follow ARG-based pins, so these stay manual or Renovate-managed:
-#   - ARG BASE_IMAGE (opensuse/leap) and ARG K3S_VERSION in images/Dockerfile
+#   - ARG BASE_IMAGE (ubuntu) and ARG K3S_VERSION in images/Dockerfile
 #   - auroraboot_version inputs in the workflows
 # renovate.json covers all of them — if the Renovate app gets installed on the
 # org, delete this file to avoid duplicate PRs.
