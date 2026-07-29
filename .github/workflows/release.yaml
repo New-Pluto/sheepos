@@ -95,7 +95,7 @@ jobs:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
-    uses: kairos-io/kairos-factory-action/.github/workflows/reusable-factory.yaml@v1.1.1
+    uses: kairos-io/kairos-factory-action/.github/workflows/reusable-factory.yaml@v1.2.0
     with:
       dockerfile_path: images/Dockerfile.release
       base_image: ghcr.io/new-pluto/sheepos:${{ github.ref_name }}-${{ matrix.arch }}
