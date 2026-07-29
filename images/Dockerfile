@@ -42,7 +42,7 @@
 # renovate: docker-image
 ARG BASE_IMAGE=ubuntu:26.04
 
-FROM quay.io/kairos/kairos-init:v0.15.0 AS kairos-init
+FROM quay.io/kairos/kairos-init:v0.16.1 AS kairos-init
 
 FROM ${BASE_IMAGE}
 
