@@ -38,6 +38,14 @@
 # a 3072 MiB ext2 slot adds ~116 MB of fs overhead over raw du, so the final
 # layer asserts du -sxb / <= 720 MB, which keeps the slot <= ~800 MiB with
 # real-world overhead — upgrades can never wedge COS_STATE on ENOSPC.
+# The budget only holds if it measures what installers MATERIALIZE: the
+# artifact pipeline (AuroraBoot OCI unpack -> mksquashfs -> installer rsync)
+# breaks hardlinks into independent full copies, and Ubuntu's Rust coreutils
+# is a 114-entry hardlink farm of one ~11 MB multi-call binary (+1.28 GB
+# installed — found by the v0.2.0 boot smoke, where the slot came out 1.9 GB
+# against this 720 MB assert). The slim layer collapses hardlink farms into
+# symlinks, which every pipeline stage preserves, and the final layer fails
+# the build if any multi-hardlinked file remains.
 
 # renovate: docker-image
 ARG BASE_IMAGE=ubuntu:26.04
@@ -333,6 +341,23 @@ RUN BASE_PRETTY="$(. /etc/os-release && echo "${PRETTY_NAME}")" && \
 # real package) but still prints what did match; the pipe discards that
 # status and xargs -r skips empty input. A failing dpkg --purge DOES fail
 # the build.
+#
+# Hardlink farms become symlink farms: AuroraBoot's OCI unpack breaks
+# hardlinks into independent copies (mksquashfs dedup then hides the cost in
+# the ISO, and the installer rsync materializes every copy on disk — Ubuntu's
+# uutils coreutils alone inflates the installed rootfs by ~1.28 GB, 3x the
+# slot budget). Each hardlink group is collapsed to its first path as the one
+# real file plus symlinks for the rest; uutils dispatches on argv[0] basename,
+# so /usr/bin/md5sum -> farm/md5sum -> farm/<kept> behaves identically. The
+# rm/ln used inside the loop are staged as dereferenced copies first: both
+# ARE farm members, so the loop iteration that processes ln would otherwise
+# delete the only ln between its rm and its ln -s ("ln: not found", and the
+# staged copies must keep their exact basenames for argv[0] dispatch). The
+# post-condition below fails the build if any hardlink GROUP (two or more
+# visible paths sharing an inode) survives — it cannot test raw st_nlink:
+# the unlinks land as overlayfs whiteouts, so the kept lower-layer file
+# still reports its old link count even though only one path remains (and
+# only path count matters: that is what the unpack multiplies by).
 RUN set -eu; \
     INITRD_MD5="$(md5sum /boot/initrd | cut -d' ' -f1)"; \
     dpkg-query -f '${Package}\n' -W '*-dev' 'gcc*' 'cpp*' 'binutils*' 2>/dev/null \
@@ -359,10 +384,21 @@ RUN set -eu; \
     rm -f /boot/System.map-* /usr/lib/firmware/regulatory.db*; \
     [ ! -d /usr/share/consolefonts ] || \
         find /usr/share/consolefonts -type f ! -name 'default8x16*' -delete; \
+    find / -xdev -type f -links +1 -printf '%D:%i\t%p\n' | sort \
+        | awk -F'\t' '{ if ($1 == prev) print keep "\t" $2; else { prev = $1; keep = $2 } }' \
+        > /tmp/hardlink-dups.tsv; \
+    mkdir -p /tmp/slimtools; \
+    cp -L /usr/bin/rm /usr/bin/ln /tmp/slimtools/; \
+    while IFS="$(printf '\t')" read -r keep dup; do \
+        /tmp/slimtools/rm "$dup" && /tmp/slimtools/ln -s "$keep" "$dup"; \
+    done < /tmp/hardlink-dups.tsv; \
+    rm -rf /tmp/hardlink-dups.tsv /tmp/slimtools; \
     ldconfig; \
     \
     [ "$INITRD_MD5" = "$(md5sum /boot/initrd | cut -d' ' -f1)" ] \
         || { echo "FATAL: slim step modified /boot/initrd"; exit 1; }; \
+    [ -z "$(find / -xdev -type f -links +1 -printf '%D:%i\n' | sort | uniq -d)" ] \
+        || { echo "FATAL: hardlink groups remain (the OCI->ISO->installer pipeline breaks hardlinks into full copies, voiding the size budget)"; exit 1; }; \
     if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
         KVER="$(ls /usr/lib/modules)"; \
         for m in xe i915 cec rc-core e1000e igc igb i40e r8169 nvme ahci \
