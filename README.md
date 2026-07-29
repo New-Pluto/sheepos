@@ -23,7 +23,11 @@ ext2 slot ≤ ~816 MiB — the build fails if the rootfs exceeds 720 MB
 (≈ 800 MiB/slot with measured ext2 overhead), keeping that guarantee
 mechanical rather than aspirational. Measured at merge time: ~660 MB rootfs
 → ~740 MiB/slot, smaller than the openSUSE image it replaces (733 MiB) while
-adding MS-03 hardware support.
+adding MS-03 hardware support. Hardlink farms are collapsed to symlinks at
+build time — the OCI → ISO → installer pipeline breaks hardlinks into full
+copies, and Ubuntu's Rust coreutils farm alone would otherwise triple the
+installed footprint — and the build fails if any multi-hardlinked file
+remains.
 
 | | |
 |---|---|
