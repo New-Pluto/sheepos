@@ -34,7 +34,7 @@ jobs:
       base_image: ${{ steps.arg.outputs.base_image }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Read ARG BASE_IMAGE from images/Dockerfile
         id: arg
         run: |
