@@ -319,14 +319,20 @@ RUN BASE_PRETTY="$(. /etc/os-release && echo "${PRETTY_NAME}")" && \
 # leftovers; the ZFS stack (no pools here — also stops zfs-load-module
 # dragging deprecated systemd-udev-settle into every boot); ubuntu-pro/
 # python3-apt (dead without apt, their timers/services enabled otherwise);
-# file/magic, mime and xkb databases nothing consumes; neovim (kairos-init
-# also installs nano, which stays as the emergency editor); then apt/dpkg
-# themselves (all dpkg work runs before dpkg is deleted). Also dropped:
+# file/magic, mime and xkb databases nothing consumes; the console-setup
+# stack (console-setup/-linux, keyboard-configuration — headless nodes on
+# the kernel's built-in US keymap/font; purging xkb-data while leaving its
+# consumer made console-setup.service fail every boot, issue #15); neovim
+# (kairos-init also installs nano, which stays as the emergency editor);
+# then apt/dpkg themselves (all dpkg work runs before dpkg is deleted).
+# Also dropped:
 # kairos p2p extras (edgevpn/pebble — sheepnet provisions via its own
 # netboot), console fonts except the default, /boot/System.map (nothing
 # reads it at runtime), /boot/grub (install-time GRUB assets live in
 # /usr/lib/grub + /usr/share/grub), and the motd-news/dpkg-db-backup units
-# (owned by essential packages, so links/units are removed by hand).
+# (owned by essential packages, so links/units are removed by hand). The
+# console-setup enablement links and /etc/console-setup cache are removed
+# by hand too: postinst-generated, so purge may leave them behind.
 #
 # set -eu: any failed purge, rm or assert FAILS THE BUILD (the old
 # '|| true' chain let a broken slim step ship silently). --no-triggers:
@@ -364,7 +370,8 @@ RUN set -eu; \
         | xargs -r dpkg --purge --force-depends --force-remove-reinstreq --no-triggers; \
     dpkg-query -f '${Package}\n' -W 'zfsutils*' 'libzfs*' 'libnvpair*' 'libuutil*' 'libzpool*' \
         'ubuntu-pro-client*' 'ubuntu-advantage*' 'python3-apt' \
-        'file' 'libmagic*' 'xkb-data' 'shared-mime-info' 'neovim*' 2>/dev/null \
+        'file' 'libmagic*' 'xkb-data' 'console-setup*' 'keyboard-configuration' \
+        'shared-mime-info' 'neovim*' 2>/dev/null \
         | xargs -r dpkg --purge --force-depends --force-remove-reinstreq --no-triggers; \
     dpkg-query -f '${Package}\n' -W 'apt' 'apt-utils' 'libapt-pkg*' 2>/dev/null \
         | xargs -r dpkg --purge --force-depends --force-remove-reinstreq --no-triggers; \
@@ -380,6 +387,9 @@ RUN set -eu; \
            /usr/lib/systemd/system/dpkg-db-backup.service /usr/lib/systemd/system/dpkg-db-backup.timer \
            /etc/systemd/system/timers.target.wants/motd-news.timer \
            /etc/systemd/system/timers.target.wants/dpkg-db-backup.timer \
+           /etc/systemd/system/multi-user.target.wants/console-setup.service \
+           /etc/systemd/system/sysinit.target.wants/keyboard-setup.service \
+           /etc/console-setup \
            /var/cache/* /var/log/* /tmp/* /root/.cache; \
     rm -f /boot/System.map-* /usr/lib/firmware/regulatory.db*; \
     [ ! -d /usr/share/consolefonts ] || \
