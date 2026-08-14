@@ -153,3 +153,10 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD/artifacts:/output" quay.io/kairos/auroraboot:v0.21.2 \
   build-iso --output /output/ docker:sheepos:dev
 ```
+
+## License
+
+SheepOS is licensed under the [GNU Affero General Public License v3.0](LICENSE)
+(SPDX: `AGPL-3.0-only`). Copyright © 2026 New-Pluto. The licenses of the
+components the built image aggregates (Kairos, k3s, Ubuntu packages, …) are
+unaffected and remain with their upstreams.
