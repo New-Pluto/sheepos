@@ -110,19 +110,24 @@ sheepnet triggers the rollout. See the sheepnet runbook
 
 ## Keeping it up to date
 
-All moving parts are pinned; updates arrive as PRs, the `build` workflow
-validates them end-to-end (both arches, full ISO build) before merge:
+All moving parts are pinned; updates arrive as Renovate PRs, and the `build`
+workflow validates each one end-to-end (both arches, full ISO build) before
+merge:
 
-| Pin | Where | Bumped by |
+| Pin | Where | Policy |
 |---|---|---|
-| kairos-init | `FROM quay.io/kairos/kairos-init:vX` in `images/Dockerfile` | Dependabot + Renovate |
-| Kairos Factory Action | `uses: ...reusable-factory.yaml@vX` in both workflows | Dependabot + Renovate |
-| Ubuntu | `ARG BASE_IMAGE` default in `images/Dockerfile` (single source of truth — `build.yaml` reads the ARG at runtime) | Renovate (`# renovate: docker-image`) |
-| k3s | `ARG K3S_VERSION` in `images/Dockerfile` | Renovate (`# renovate:` annotation) |
-| AuroraBoot | `auroraboot_version:` in both workflows | Renovate (`# renovate:` annotation) |
+| kairos-init | `FROM quay.io/kairos/kairos-init:vX` in `images/Dockerfile` | automerge non-major |
+| Kairos Factory Action | `uses: ...reusable-factory.yaml@<ref>` in both workflows | automerge non-major |
+| AuroraBoot | `auroraboot_version:` in both workflows (`# renovate:` annotation) | automerge non-major |
+| Ubuntu | `ARG BASE_IMAGE` default in `images/Dockerfile` (single source of truth — `build.yaml` reads the ARG at runtime) | dashboard approval, LTS tags only |
+| k3s | `ARG K3S_VERSION` in `images/Dockerfile` (`# renovate:` annotation) | human merge — must respect sheepnet's Cilium compatibility floor |
 
-Dependabot works out of the box; `renovate.json` adds full coverage if the
-Renovate app is installed on the org (then delete `.github/dependabot.yml`).
+Bump PRs come from the Mend Renovate app (installed on the New-Pluto org),
+which also digest-pins the workflow `uses:` refs; GitHub's Dependabot
+**alerts** stay enabled in the repo settings for security advisories, but
+Dependabot version PRs are retired. Automerge is safe here because merging
+publishes nothing — releases only ship when a `v*` tag is pushed, and
+sheepnet's SUC rollout gates what actually reaches nodes.
 
 Ubuntu security patches need no pin change at all — packages are fetched at
 build time, so **cut a release roughly monthly** (or after a relevant CVE) to
