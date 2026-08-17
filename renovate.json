@@ -1,8 +1,10 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Keeps the SheepOS pipeline in sync with kairos-init, the Kairos Factory Action, AuroraBoot, Ubuntu and k3s. Built-in managers cover Dockerfile FROM lines and workflow `uses:` refs; the custom managers below cover pins that live in ARG defaults / workflow inputs. If Renovate is enabled on the org, delete .github/dependabot.yml to avoid duplicate PRs.",
-  "extends": ["config:recommended"],
+  "description": "Keeps the SheepOS pipeline in sync with kairos-init, the Kairos Factory Action, AuroraBoot, Ubuntu and k3s via the Mend Renovate app (installed on the New-Pluto org). GitHub Dependabot *alerts* stay enabled in repo settings for security advisories; Dependabot version PRs are retired (.github/dependabot.yml deleted). Built-in managers cover Dockerfile FROM lines and workflow `uses:` refs; the custom managers below cover pins that live in ARG defaults / workflow inputs. platformAutomerge is off (mirrors sheepnet): Renovate merges automerge-eligible PRs itself once every check on the PR is green — build.yaml runs on every pull_request with no paths filter, so checks are always present. Automerge is safe here because merging publishes nothing: releases only ship on a manual v* tag, and sheepnet's SUC rollout gates what reaches nodes.",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "timezone": "America/New_York",
   "labels": ["dependencies"],
+  "platformAutomerge": false,
   "customManagers": [
     {
       "customType": "regex",
@@ -26,7 +28,7 @@
     {
       "matchDepNames": ["k3s-io/k3s"],
       "versioning": "semver-coerced",
-      "description": "k3s tags carry +k3sN build metadata; coerce for ordering. Keep within the minor the cluster supports before merging."
+      "description": "k3s tags carry +k3sN build metadata; coerce for ordering. NEVER automerge: bumps must respect sheepnet's Cilium compatibility floor and ideally match what the cluster is being upgraded to."
     },
     {
       "matchDepNames": ["ubuntu"],
@@ -40,6 +42,18 @@
       "matchUpdateTypes": ["major", "minor"],
       "dependencyDashboardApproval": true,
       "description": "New Ubuntu releases change the userland — opt in deliberately instead of auto-PRing."
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest", "pinDigest"],
+      "automerge": true,
+      "description": "Std actions + the factory reusable-workflow ref: non-major bumps and digest pins/refreshes automerge on green CI. Majors (e.g. factory v1→v2, which may change inputs) stay human."
+    },
+    {
+      "matchDepNames": ["quay.io/kairos/kairos-init", "quay.io/kairos/auroraboot"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "description": "Build-chain tooling: every PR is validated end-to-end by the build matrix (image + ISO, both arches) before Renovate merges, and a merge publishes nothing until a release tag. Majors stay human."
     }
   ]
 }
