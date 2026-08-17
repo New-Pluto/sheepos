@@ -341,10 +341,23 @@ for name in $(lsblk -dn -o NAME,TYPE | awk '$2 == "disk" { print $1 }'); do
         zram*|ram*|fd*|mmcblk*boot*) continue ;;
     esac
     # TRAN/RM are queried per device: a combined multi-column listing
-    # misparses in awk when TRAN is empty (fields shift left).
-    tran=$(lsblk -dn -o TRAN "/dev/$name" 2>/dev/null | tr -d '[:space:]')
+    # misparses in awk when TRAN is empty (fields shift left). A FAILED
+    # query must not fail open — an empty result would pass both filters
+    # and count an unqueryable (possibly USB) disk as eligible — and must
+    # not fail half-closed either (skipping just this disk could bless a
+    # sibling while this one's nature is unknown): refuse outright. The
+    # status check needs assign-then-trim; piping into tr would mask it.
+    if ! tran=$(lsblk -dn -o TRAN "/dev/$name"); then
+        echo "sheepos-pick-disk: cannot query TRAN of /dev/$name; refusing to guess." >&2
+        exit 1
+    fi
+    tran=$(printf '%s' "$tran" | tr -d '[:space:]')
     if [ "$tran" = "usb" ]; then continue; fi
-    rm_flag=$(lsblk -dn -o RM "/dev/$name" 2>/dev/null | tr -d '[:space:]')
+    if ! rm_flag=$(lsblk -dn -o RM "/dev/$name"); then
+        echo "sheepos-pick-disk: cannot query RM of /dev/$name; refusing to guess." >&2
+        exit 1
+    fi
+    rm_flag=$(printf '%s' "$rm_flag" | tr -d '[:space:]')
     if [ "$rm_flag" = "1" ]; then continue; fi
     picked="/dev/$name"
     count=$((count + 1))
