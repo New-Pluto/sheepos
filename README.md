@@ -76,11 +76,13 @@ Pull requests run `.github/workflows/build.yaml` — the same factory pipeline
 ### Netboot / (re)provision
 
 Point `config.yaml` at the release ISO (sheepnet downloads it, verifies the
-`.sha256`, and extracts kernel/initrd/squashfs with AuroraBoot):
+`.sha256`, and extracts kernel/initrd/squashfs itself with a pure-Go ISO
+reader that replicates AuroraBoot's extraction contract — no docker or
+AuroraBoot on the provisioning side since sheepnet PR #72):
 
 ```yaml
 kairos:
-  iso_url: "https://github.com/New-Pluto/sheepos/releases/download/v0.2.0/kairos-ubuntu-26.04-standard-amd64-generic-v0.2.0-k3sv1.36.0+k3s1.iso"
+  iso_url: "https://github.com/New-Pluto/sheepos/releases/download/v0.2.2/kairos-ubuntu-26.04-standard-amd64-generic-v0.2.2-k3sv1.36.0+k3s1.iso"
 ```
 
 Keep the `k3sv<version>` part of the filename intact — sheepnet parses it to
@@ -91,7 +93,7 @@ enforce Cilium/k3s compatibility.
 On a node (one at a time, wait for Ready between nodes):
 
 ```bash
-sudo kairos-agent upgrade --source oci:ghcr.io/new-pluto/sheepos:v0.2.0
+sudo kairos-agent upgrade --source oci:ghcr.io/new-pluto/sheepos:v0.2.2
 sudo reboot
 ```
 
@@ -100,10 +102,11 @@ passive partition keeps the previous image as rollback. No `--force` is needed
 even for the one-time migration off the older `kairos-hadron` image — current
 `kairos-agent upgrade --source oci:` performs no version/downgrade check.
 
-This can become hands-off with the Kairos Operator (`NodeOpUpgrade`) or a Rancher
-system-upgrade-controller Plan (Kairos ships `/usr/sbin/suc-upgrade` for it),
-`concurrency: 1`, one node at a time. Keep OS rollouts supervised while the
-silent-freeze issue is open. See the sheepnet runbook `docs/sheepos-migration.md`.
+In sheepnet this is hands-off since 2026-08: a health-gated Rancher
+system-upgrade-controller Plan (Kairos ships `/usr/sbin/suc-upgrade` for it)
+rolls label-armed nodes one at a time — merging the sheepos version-bump PR in
+sheepnet triggers the rollout. See the sheepnet runbook
+`flux/clusters/sheepnet/node-os/README.md`.
 
 ## Keeping it up to date
 
