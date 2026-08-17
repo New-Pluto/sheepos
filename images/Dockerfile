@@ -50,7 +50,7 @@
 # renovate: docker-image
 ARG BASE_IMAGE=ubuntu:26.04
 
-FROM quay.io/kairos/kairos-init:v0.16.3 AS kairos-init
+FROM quay.io/kairos/kairos-init:v0.16.4 AS kairos-init
 
 FROM ${BASE_IMAGE}
 
@@ -312,6 +312,74 @@ RUN BASE_PRETTY="$(. /etc/os-release && echo "${PRETTY_NAME}")" && \
         "SHEEPOS_K3S_VERSION=\"${K3S_VERSION}\"" \
         "SHEEPOS_HOME_URL=\"https://github.com/New-Pluto/sheepos\"" \
         > /etc/sheepos-release
+
+# Install-target picker: the fleet's definition of "auto" device selection.
+# sheepnet's rendered cloud-config references it as
+#   install.device: "script:///usr/bin/sheepos-pick-disk"
+# kairos-agent (>= v2.30.0, in-image) resolves script:// at install-spec
+# build time — BEFORE any partitioning or cloud-config stage — executing the
+# command and using its stdout as the device; non-zero exit or empty output
+# aborts the install with nothing written. That timing is also why the script
+# must live in the image: no stage has run yet that could have written it.
+# Deliberately stricter than kairos-agent's own "auto" (largest disk, USB
+# included): install to the machine's ONLY eligible disk, refuse otherwise.
+COPY --chmod=0755 <<'PICKDISK' /usr/bin/sheepos-pick-disk
+#!/bin/sh
+# SheepOS install-target picker (install.device: script:// resolver).
+# stdout = chosen device; non-zero exit = abort install (pre-partitioning).
+# Eligible disk: TYPE=disk, not USB-attached (TRAN!=usb), not removable
+# (RM!=1), not zram/ram/fd/eMMC-boot. Exactly one eligible disk -> print it;
+# zero or several -> refuse with the inventory on stderr, so the operator
+# sets an explicit nodes[].install_device (prefer /dev/disk/by-id/...) in
+# sheepnet's config.yaml for that node.
+set -u
+
+count=0
+picked=""
+for name in $(lsblk -dn -o NAME,TYPE | awk '$2 == "disk" { print $1 }'); do
+    case "$name" in
+        zram*|ram*|fd*|mmcblk*boot*) continue ;;
+    esac
+    # TRAN/RM are queried per device: a combined multi-column listing
+    # misparses in awk when TRAN is empty (fields shift left). A FAILED
+    # query must not fail open — an empty result would pass both filters
+    # and count an unqueryable (possibly USB) disk as eligible — and must
+    # not fail half-closed either (skipping just this disk could bless a
+    # sibling while this one's nature is unknown): refuse outright. The
+    # status check needs assign-then-trim; piping into tr would mask it.
+    if ! tran=$(lsblk -dn -o TRAN "/dev/$name"); then
+        echo "sheepos-pick-disk: cannot query TRAN of /dev/$name; refusing to guess." >&2
+        exit 1
+    fi
+    tran=$(printf '%s' "$tran" | tr -d '[:space:]')
+    if [ "$tran" = "usb" ]; then continue; fi
+    if ! rm_flag=$(lsblk -dn -o RM "/dev/$name"); then
+        echo "sheepos-pick-disk: cannot query RM of /dev/$name; refusing to guess." >&2
+        exit 1
+    fi
+    rm_flag=$(printf '%s' "$rm_flag" | tr -d '[:space:]')
+    if [ "$rm_flag" = "1" ]; then continue; fi
+    picked="/dev/$name"
+    count=$((count + 1))
+done
+
+if [ "$count" -eq 1 ]; then
+    printf '%s\n' "$picked"
+    exit 0
+fi
+
+{
+    echo "sheepos-pick-disk: REFUSING to pick an install target: $count eligible disks (need exactly 1)."
+    echo "Eligible = TYPE=disk, TRAN!=usb, RM!=1. Full inventory:"
+    lsblk -dn -o NAME,SIZE,TYPE,TRAN,RM,MODEL 2>/dev/null
+    echo "Fix: set nodes[].install_device for this node in sheepnet config.yaml (prefer a stable /dev/disk/by-id/ path)."
+} >&2
+exit 1
+PICKDISK
+
+# Syntax-gate the picker at build time; a broken script would otherwise only
+# surface as an install-time abort on real hardware.
+RUN sh -n /usr/bin/sheepos-pick-disk && test -x /usr/bin/sheepos-pick-disk
 
 # Final slim + post-conditions (keep this the LAST layer). SheepOS upgrades
 # are whole-image Kairos A/B swaps (kairos-agent), never package operations,
