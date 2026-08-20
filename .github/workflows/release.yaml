@@ -23,11 +23,15 @@ on:
   push:
     tags: ["v*"]
 
+# Must cover every permission the factory's reusable workflow declares on its
+# jobs (see build.yaml) — the iso job inherits this block; the oci/tag jobs
+# carry their own job-level grants.
 permissions:
   contents: write
   actions: read
   security-events: write
   id-token: write
+  packages: write
 
 jobs:
   oci:

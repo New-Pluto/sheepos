@@ -14,12 +14,17 @@ concurrency:
   cancel-in-progress: true
 
 # The factory's reusable workflow declares these on its job; the caller must
-# grant them. contents:write is only exercised by its release step (off here).
+# grant them or the run fails at workflow-graph validation ("The nested job
+# 'build' is requesting 'packages: write', but is only allowed ..."), before
+# any job starts. contents:write is only exercised by its release step and
+# packages:write (declared since factory v1.4.3) by its image-push step —
+# both off here.
 permissions:
   contents: write
   actions: read
   security-events: write
   id-token: write
+  packages: write
 
 jobs:
   # The factory's reusable workflow always injects its base_image input as
