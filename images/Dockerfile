@@ -59,7 +59,7 @@ ARG MODEL=generic
 ARG TRUSTED_BOOT=false
 ARG VERSION
 # renovate: datasource=github-releases depName=k3s-io/k3s
-ARG K3S_VERSION=v1.36.3+k3s1
+ARG K3S_VERSION=v1.36.4+k3s1
 
 # ---------------------------------------------------------------------------
 # Everything up to the kairos-init RUN shapes what apt/dpkg install and what
