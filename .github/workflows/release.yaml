@@ -3,14 +3,17 @@
 #
 #   1. oci:      build the SheepOS image once per arch (images/Dockerfile) and
 #                push ghcr.io/new-pluto/sheepos:<tag>-{amd64,arm64}.
-#                This job pushes with GITHUB_TOKEN — the factory job below
-#                cannot (its reusable workflow omits packages:write), which is
-#                why the build is split this way.
+#                The push lives in our own job so the iso job below
+#                repackages exactly those pushed bytes (the factory has
+#                been able to push on its own since v1.4.3; the split stays
+#                for that one-build guarantee).
 #   2. manifest: stitch the per-arch images into the multi-arch tags
 #                :<tag> and :latest (the upgrade source nodes pull).
-#   3. iso:      Kairos Factory repackages the *pushed* per-arch image
-#                (images/Dockerfile.release passthrough) into a bootable ISO,
-#                and uploads ISO + .sha256 to the GitHub release for the tag.
+#   3. iso:      needs oci AND manifest — Kairos Factory repackages the
+#                *pushed* per-arch image (images/Dockerfile.release
+#                passthrough) into a bootable ISO and uploads ISO + .sha256
+#                to the GitHub release for the tag, so a release can only
+#                appear once the upgrade tag it documents exists.
 #                ISO filename comes from /etc/kairos-release and looks like
 #                kairos-ubuntu-26.04-standard-amd64-generic-v0.2.0-k3sv1.36.0+k3s1.iso
 #                — sheepnet parses the k3s version out of that name, keep it.
@@ -24,8 +27,8 @@ on:
     tags: ["v*"]
 
 # Must cover every permission the factory's reusable workflow declares on its
-# jobs (see build.yaml) — the iso job inherits this block; the oci/tag jobs
-# carry their own job-level grants.
+# jobs (see build.yaml) — the iso job inherits this block; the oci/manifest
+# jobs carry their own job-level grants.
 permissions:
   contents: write
   actions: read
@@ -94,7 +97,11 @@ jobs:
 
   iso:
     name: iso-${{ matrix.arch }}
-    needs: oci
+    # The factory's release step (inside this job) creates the GitHub release
+    # and uploads the ISOs. Gate it on manifest too, so ISOs and the :<tag>
+    # upgrade image nodes pull appear together or not at all (a failed
+    # manifest is repaired by "re-run failed jobs", which re-runs both).
+    needs: [oci, manifest]
     strategy:
       fail-fast: false
       matrix:
