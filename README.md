@@ -19,7 +19,7 @@ final layer removes the package manager and the dpkg database entirely.
 Upgrades are whole-image A/B swaps, so none of that is needed at runtime.
 An in-place upgrade peaks at **three** image slots on the 2.4 GB `COS_STATE`
 partition (active + passive + transition), so self-sustaining A/B needs each
-ext2 slot ≤ ~816 MiB — the build fails if the rootfs exceeds 720 MB
+ext2 slot ≤ ~816 MiB — the amd64 build fails if the rootfs exceeds 720 MB
 (≈ 800 MiB/slot with measured ext2 overhead), keeping that guarantee
 mechanical rather than aspirational. Measured at merge time: ~660 MB rootfs
 → ~740 MiB/slot, smaller than the openSUSE image it replaces (733 MiB) while
@@ -32,10 +32,10 @@ remains.
 | | |
 |---|---|
 | Base OS | Ubuntu 26.04 LTS |
-| Kubernetes | k3s `v1.36.0+k3s1` (pinned in `images/Dockerfile`) |
-| Architectures | amd64, arm64 |
+| Kubernetes | k3s — pinned by `ARG K3S_VERSION` in `images/Dockerfile` (see [Keeping it up to date](#keeping-it-up-to-date)); each release stamps that pin into its ISO name as `k3sv<version>` |
+| Architectures | amd64 — the fleet target; the hardware contract and the 720 MB size budget are build-enforced. arm64 — built, CVE-scanned and published on every release, but **untested**: no arm64 nodes exist and the contract/size asserts do not run for it |
 | Boot model | Kairos A/B immutable, `/etc` rebuilt each boot, config via `/oem` |
-| ISO (per release) | `kairos-ubuntu-26.04-standard-<arch>-generic-<tag>-k3sv1.36.0+k3s1.iso` |
+| ISO (per release) | `kairos-ubuntu-26.04-standard-<arch>-generic-<tag>-k3sv<k3s-version>.iso` (e.g. `...-v0.2.3-k3sv1.36.3+k3s1.iso`) |
 | OCI image | `ghcr.io/new-pluto/sheepos:<tag>` (multi-arch), `:<tag>-amd64`, `:<tag>-arm64`, `:latest` |
 
 ## How a release works
@@ -48,15 +48,15 @@ git tag v0.x.y && git push origin v0.x.y
   1. oci      — builds images/Dockerfile once per arch, pushes
                 ghcr.io/new-pluto/sheepos:<tag>-{amd64,arm64}  (SBOM attached)
   2. manifest — stitches them into the multi-arch :<tag> and :latest
-  3. iso      — Kairos Factory repackages the *pushed* image (passthrough
-                images/Dockerfile.release) into a bootable ISO + .sha256 and
-                uploads them to the GitHub release
+  3. iso      — after manifest: Kairos Factory repackages the *pushed* image
+                (passthrough images/Dockerfile.release) into a bootable ISO +
+                .sha256 and uploads them to the GitHub release
 ```
 
 The image is built exactly once: the ISO a node netboots and the OCI image a
-node upgrades to are the same build. The OCI push happens in our own job
-because the factory's reusable workflow does not request `packages: write`,
-so its `GITHUB_TOKEN` cannot push to ghcr.io.
+node upgrades to are the same build. The OCI push happens in our own `oci`
+job so the ISO jobs repackage exactly the bytes that were pushed, and the
+GitHub release is only created once the multi-arch upgrade tag exists.
 
 Pull requests run `.github/workflows/build.yaml` — the same factory pipeline
 (image + ISO + Grype CVE report) for both arches, publishing nothing. Green PR
@@ -82,7 +82,7 @@ AuroraBoot on the provisioning side since sheepnet PR #72):
 
 ```yaml
 kairos:
-  iso_url: "https://github.com/New-Pluto/sheepos/releases/download/v0.2.2/kairos-ubuntu-26.04-standard-amd64-generic-v0.2.2-k3sv1.36.0+k3s1.iso"
+  iso_url: "https://github.com/New-Pluto/sheepos/releases/download/v0.2.3/kairos-ubuntu-26.04-standard-amd64-generic-v0.2.3-k3sv1.36.3+k3s1.iso"
 ```
 
 Keep the `k3sv<version>` part of the filename intact — sheepnet parses it to
@@ -93,7 +93,7 @@ enforce Cilium/k3s compatibility.
 On a node (one at a time, wait for Ready between nodes):
 
 ```bash
-sudo kairos-agent upgrade --source oci:ghcr.io/new-pluto/sheepos:v0.2.2
+sudo kairos-agent upgrade --source oci:ghcr.io/new-pluto/sheepos:v0.2.3
 sudo reboot
 ```
 

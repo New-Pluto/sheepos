@@ -30,7 +30,8 @@
 # plus the cluster runtime: Longhorn (iscsi_tcp), Cilium (bpf/netfilter/
 # vxlan/geneve/wireguard), NFSv4.1 client. The firmware keep-set and module
 # excludes below encode exactly that, and the post-conditions in the final
-# layer FAIL THE BUILD if the contract regresses.
+# layer FAIL THE BUILD if the contract regresses (amd64 builds only — see
+# the note above the final layer).
 #
 # SIZE CONTRACT — COS_STATE on the M700s is 2.4 GB and an in-place upgrade
 # peaks at THREE image slots (active + passive + transition). Self-sustaining
@@ -415,6 +416,12 @@ RUN sh -n /usr/bin/sheepos-pick-disk && test -x /usr/bin/sheepos-pick-disk
 # real package) but still prints what did match; the pipe discards that
 # status and xargs -r skips empty input. A failing dpkg --purge DOES fail
 # the build.
+#
+# The module/firmware and size asserts run for amd64 only: the hardware
+# contract is the x86 fleet and the 720 MB budget is the M700's COS_STATE.
+# The arm64 leg has no hardware target and has never fit that budget
+# (729.6 MB at v0.2.0, ~734 MB on 2026-08-31), so it is built and published
+# but not gated — the README says so.
 #
 # Hardlink farms become symlink farms: AuroraBoot's OCI unpack breaks
 # hardlinks into independent copies (mksquashfs dedup then hides the cost in
