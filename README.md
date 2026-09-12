@@ -12,8 +12,9 @@ GitHub release (ISOs for netboot) and OCI image (for in-place upgrades). The
 image is **slimmed to a minimal immutable runtime**, mostly at *install* time:
 only the firmware packages the fleet's two machine classes actually need are
 installed (Ubuntu's split `linux-firmware-*` vendor packages + dpkg path
-filters trim them to the exact keep-set — Panther Lake `xe/` + `i915/xe3*`,
-Skylake `i915/skl_dmc*`, Realtek `rtl_nic/`), whole kernel-module classes
+filters trim them to the exact keep-set — Panther Lake `xe/` + `i915/xe3*` +
+the NPU 5 blob `intel/vpu/vpu_50xx*`, Skylake `i915/skl_dmc*`, Realtek
+`rtl_nic/`), whole kernel-module classes
 that can't matter on wired x86 k3s nodes are never written to disk, and the
 final layer removes the package manager and the dpkg database entirely.
 Upgrades are whole-image A/B swaps, so none of that is needed at runtime.

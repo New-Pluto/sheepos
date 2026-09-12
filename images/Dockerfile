@@ -21,12 +21,21 @@
 #                  ISO filename (k3sv<X.Y.Z>)
 #
 # HARDWARE CONTRACT — this image must boot two machine classes:
-#   - Lenovo M700 Tiny (Skylake: i915 + skl_dmc, e1000e, SATA) — current fleet
+#   - Lenovo M700 Tiny (Skylake: i915 + skl_dmc, e1000e, SATA) — powered-off
+#     rollback fleet (no NPU; the ivpu module simply never binds there)
 #   - Minisforum MS-03 (Panther Lake: xe iGPU needing xe/ptl_guc+ptl_huc and
 #     i915/xe3* display DMC — without them the xe driver tears down simpledrm
-#     and then fails to probe, permanently killing the only console; RTL8127A
-#     10GbE via r8169 + rtl_nic/rtl8127a firmware; X710 SFP+ via i40e and
-#     i226-LM via igc, both firmware-less; NVMe) — incoming
+#     and then fails to probe, permanently killing the only console; the same
+#     xe + ptl_huc pair is the whole KERNEL side of hardware media transcoding
+#     (VA-API/QSV — the userspace media driver ships inside the workload
+#     container); NPU 5 via the ivpu accel driver (module name intel_vpu,
+#     directory drivers/accel/ivpu) + intel/vpu/vpu_50xx*
+#     firmware (exposed as /dev/accel/accel0, group render via systemd's
+#     50-udev-default accel rule — consumed by the Intel NPU device plugin;
+#     the userspace NPU driver, like the media driver, lives in the
+#     container); RTL8127A 10GbE via r8169 + rtl_nic/rtl8127a firmware; X710
+#     SFP+ via i40e and i226-LM via igc, both firmware-less; NVMe) — current
+#     fleet since 2026-09-10
 # plus the cluster runtime: Longhorn (iscsi_tcp), Cilium (bpf/netfilter/
 # vxlan/geneve/wireguard), NFSv4.1 client. The firmware keep-set and module
 # excludes below encode exactly that, and the post-conditions in the final
@@ -81,13 +90,21 @@ RUN userdel -r ubuntu 2>/dev/null || true
 # would silently re-break on version bumps. The bare 'path-include=...:/i915'
 # line is required: dpkg only auto-recreates a filtered-out directory when an
 # include pattern's pre-wildcard prefix covers it, so file-glob includes like
-# i915/skl_dmc* need their parent directory re-included explicitly.
+# i915/skl_dmc* need their parent directory re-included explicitly (same
+# treatment for intel/ and intel/vpu/ below). The NPU blob is a generation
+# glob, not a directory: intel/vpu/ also carries the 37xx/40xx/60xx blobs of
+# NPU generations no sheep node has, and the ivpu driver probes
+# vpu_50xx_v1.bin then vpu_50xx_v0.0.bin for Panther Lake, so vpu_50xx*
+# follows a future rename while still leaving the other generations out.
 #
 # Kernel modules: exclude classes that cannot matter on these wired x86 k3s
 # nodes. Exemptions inside drivers/media: cec and rc-core are hard modules.dep
-# dependencies of BOTH i915 and xe. Deliberately kept: all of
-# drivers/net/ethernet, nvme/ata/scsi core, md/dm, netfilter/sched, usb/hid,
-# thunderbolt (MS-03 USB4), fs/nfs (client; only the nfsd SERVER is cut).
+# dependencies of BOTH i915 and xe. drivers/accel is excluded per driver, not
+# as a class: ivpu (Intel NPU) is a hardware-contract module, the other three
+# accel drivers (AMD XDNA, Habana, Qualcomm AIC) are not. Deliberately kept:
+# all of drivers/net/ethernet, nvme/ata/scsi core, md/dm, netfilter/sched,
+# usb/hid, thunderbolt (MS-03 USB4), fs/nfs (client; only the nfsd SERVER is
+# cut).
 RUN printf '%s\n' \
         '# SheepOS install-time slimming — see images/Dockerfile header' \
         'path-exclude=/usr/lib/firmware/*' \
@@ -97,6 +114,9 @@ RUN printf '%s\n' \
         'path-include=/usr/lib/firmware/i915' \
         'path-include=/usr/lib/firmware/i915/skl_dmc*' \
         'path-include=/usr/lib/firmware/i915/xe3*' \
+        'path-include=/usr/lib/firmware/intel' \
+        'path-include=/usr/lib/firmware/intel/vpu' \
+        'path-include=/usr/lib/firmware/intel/vpu/vpu_50xx*' \
         'path-exclude=/usr/lib/modules/*/kernel/sound/*' \
         'path-exclude=/usr/lib/modules/*/kernel/drivers/media/*' \
         'path-include=/usr/lib/modules/*/kernel/drivers/media/cec/*' \
@@ -114,7 +134,9 @@ RUN printf '%s\n' \
         'path-exclude=/usr/lib/modules/*/kernel/drivers/comedi/*' \
         'path-exclude=/usr/lib/modules/*/kernel/drivers/iio/*' \
         'path-exclude=/usr/lib/modules/*/kernel/drivers/isdn/*' \
-        'path-exclude=/usr/lib/modules/*/kernel/drivers/accel/*' \
+        'path-exclude=/usr/lib/modules/*/kernel/drivers/accel/amdxdna/*' \
+        'path-exclude=/usr/lib/modules/*/kernel/drivers/accel/habanalabs/*' \
+        'path-exclude=/usr/lib/modules/*/kernel/drivers/accel/qaic/*' \
         'path-exclude=/usr/lib/modules/*/kernel/drivers/mtd/*' \
         'path-exclude=/usr/lib/modules/*/kernel/drivers/net/wwan/*' \
         'path-exclude=/usr/lib/modules/*/kernel/drivers/net/can/*' \
@@ -151,10 +173,13 @@ RUN printf '%s\n' \
 # subpackages (~640 MB) are never even downloaded (verified: zero
 # linux-firmware unpacks during the kairos-init stage).
 # linux-firmware-intel-graphics ships xe/ + i915/, linux-firmware-realtek
-# ships rtl_nic/ — the path filters above trim both to the keep-set.
+# ships rtl_nic/, linux-firmware-intel-misc ships intel/vpu/ (the NPU blobs,
+# alongside ~100 MB of ice/ish/wifi-adjacent Intel firmware the filters drop)
+# — the path filters above trim all three to the keep-set.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        linux-firmware-minimal linux-firmware-intel-graphics linux-firmware-realtek && \
+        linux-firmware-minimal linux-firmware-intel-graphics linux-firmware-realtek \
+        linux-firmware-intel-misc && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Disable device-mapper multipath — defense-in-depth #1: a blacklist that
@@ -486,16 +511,24 @@ RUN set -eu; \
         || { echo "FATAL: hardlink groups remain (the OCI->ISO->installer pipeline breaks hardlinks into full copies, voiding the size budget)"; exit 1; }; \
     if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
         KVER="$(ls /usr/lib/modules)"; \
-        for m in xe i915 cec rc-core e1000e igc igb i40e r8169 nvme ahci \
+        for m in xe i915 cec rc-core intel_vpu e1000e igc igb i40e r8169 nvme ahci \
                  iscsi_tcp dm-multipath overlay br_netfilter vxlan geneve \
                  wireguard veth cls_bpf xt_socket xt_TPROXY nft_compat; do \
             modprobe --dry-run -S "$KVER" "$m" > /dev/null \
                 || { echo "FATAL: module $m unresolvable (hardware contract)"; exit 1; }; \
         done; \
-        FW_LIST="$(modinfo -k "$KVER" xe r8169 i915 2>/dev/null | awk '/^firmware:/{print $2}' \
-            | grep -E '^(xe/ptl_(guc|huc)|rtl_nic/rtl8127|i915/skl_dmc|i915/xe3)' | sort -u)"; \
-        [ "$(printf '%s\n' "$FW_LIST" | grep -c .)" -ge 5 ] \
+        ACCEL_EXTRA="$(find /usr/lib/modules/"$KVER"/kernel/drivers/accel -name '*.ko*' ! -path '*/accel/ivpu/*')"; \
+        [ -z "$ACCEL_EXTRA" ] \
+            || { echo "FATAL: non-ivpu accel drivers shipped (size budget): $ACCEL_EXTRA"; exit 1; }; \
+        FW_LIST="$(modinfo -k "$KVER" xe r8169 i915 intel_vpu 2>/dev/null | awk '/^firmware:/{print $2}' \
+            | grep -E '^(xe/ptl_(guc|huc)|rtl_nic/rtl8127|i915/skl_dmc|i915/xe3|intel/vpu/vpu_50xx)' | sort -u)"; \
+        [ "$(printf '%s\n' "$FW_LIST" | grep -c .)" -ge 6 ] \
             || { echo "FATAL: firmware want-list too short: $FW_LIST"; exit 1; }; \
+        printf '%s\n' "$FW_LIST" | grep -q '^intel/vpu/vpu_50xx' \
+            || { echo "FATAL: intel_vpu declares no vpu_50xx firmware: $FW_LIST"; exit 1; }; \
+        VPU_EXTRA="$(find /usr/lib/firmware/intel -type f ! -name 'vpu_50xx*' 2>/dev/null)"; \
+        [ -z "$VPU_EXTRA" ] \
+            || { echo "FATAL: non-Panther-Lake intel/ firmware shipped (size budget): $VPU_EXTRA"; exit 1; }; \
         for f in $FW_LIST; do \
             [ -e "/usr/lib/firmware/$f" ] || [ -e "/usr/lib/firmware/$f.zst" ] || [ -e "/usr/lib/firmware/$f.xz" ] \
                 || { echo "FATAL: firmware $f missing (hardware contract)"; exit 1; }; \
