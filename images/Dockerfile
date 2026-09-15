@@ -272,17 +272,30 @@ RUN printf '%s\n' \
 #     udev rejects ("Unknown interface naming scheme"), so the migration hop
 #     itself lands on v259 regardless — verify `ip -br link` still shows eno1
 #     on the canary M700 before touching the other nodes.
+#   - console=ttyS4,115200n8 — the serial console goes to the Intel AMT
+#     Serial-over-LAN UART. Kairos' generic-model default is console=ttyS0,
+#     but on the MS-03 (Panther Lake) ttyS0 is a dead legacy port (EIO on
+#     write) and the AMT SOL/KT UART enumerates as ttyS4 (PCI 00:16.3,
+#     16550A @ I/O 0x4020, base_baud 115200 — identical on all three units,
+#     verified 2026-09-14). The console is only ever watched over AMT SOL
+#     (sheepnet/scripts/amt-console.sh), so this makes GRUB-to-kernel "last
+#     words" visible there. tty1 stays (baseCmd) and, being last, remains
+#     /dev/console. The sed rewrites ONLY the generic default (the rpi/nvidia
+#     model branches carry a baud suffix and don't match); on a board
+#     without a ttyS4 the console registration simply never happens.
 # bootargs.cfg is written by kairos-init's install stage, so this MUST run
-# after the kairosify RUN. The greps FAIL the build if the append didn't
-# land; multipath -t proves the conf.d blacklist parses (a parse failure
-# silently disables the whole blacklist — exactly the v0.1.0 bug).
+# after the kairosify RUN. The greps FAIL the build if the append/rewrite
+# didn't land; multipath -t proves the conf.d blacklist parses (a parse
+# failure silently disables the whole blacklist — exactly the v0.1.0 bug).
 # The find prunes ~5 zero-byte dangling symlinks dpkg's filter layer leaves
 # behind in the kept firmware dirs (targets were excluded).
 RUN sed -i -E \
-        's|^([[:space:]]*set kernelcmd="[^"]*)"|\1 rd.multipath=0 multipath=off nompath net.naming-scheme=v259"|' \
+        -e 's|^([[:space:]]*set kernelcmd="[^"]*)"|\1 rd.multipath=0 multipath=off nompath net.naming-scheme=v259"|' \
+        -e 's|^([[:space:]]*set baseExtraConsole=)"console=ttyS0"$|\1"console=ttyS4,115200n8"|' \
         /etc/cos/bootargs.cfg && \
     grep -Eq '^[[:space:]]*set kernelcmd=.*multipath=off' /etc/cos/bootargs.cfg && \
     grep -Eq '^[[:space:]]*set kernelcmd=.*net\.naming-scheme=v259' /etc/cos/bootargs.cfg && \
+    grep -Eq '^[[:space:]]*set baseExtraConsole="console=ttyS4,115200n8"$' /etc/cos/bootargs.cfg && \
     multipath -t > /dev/null && \
     multipath -t | grep -q 'devnode "\.\*"' && \
     find /usr/lib/firmware -xtype l -delete
