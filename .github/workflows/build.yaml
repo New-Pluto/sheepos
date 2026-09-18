@@ -34,7 +34,7 @@ jobs:
   # of truth, and a green PR really validates the bytes a release would ship.
   base-image:
     name: base image pin
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       base_image: ${{ steps.arg.outputs.base_image }}
     steps:
