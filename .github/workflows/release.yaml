@@ -120,5 +120,5 @@ jobs:
       security_scan_mode: report-only
       summary_artifacts: true
       # renovate: datasource=docker depName=quay.io/kairos/auroraboot
-      auroraboot_version: v0.27.1
+      auroraboot_version: v0.28.0
       custom_job_name_format: release
