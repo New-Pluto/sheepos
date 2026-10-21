@@ -50,12 +50,13 @@
 # real-world overhead — upgrades can never wedge COS_STATE on ENOSPC.
 # The budget only holds if it measures what installers MATERIALIZE: the
 # artifact pipeline (AuroraBoot OCI unpack -> mksquashfs -> installer rsync)
-# breaks hardlinks into independent full copies, and Ubuntu's Rust coreutils
-# is a 114-entry hardlink farm of one ~11 MB multi-call binary (+1.28 GB
-# installed — found by the v0.2.0 boot smoke, where the slot came out 1.9 GB
-# against this 720 MB assert). The slim layer collapses hardlink farms into
-# symlinks, which every pipeline stage preserves, and the final layer fails
-# the build if any multi-hardlinked file remains.
+# breaks hardlinks into independent full copies. Ubuntu 26.04's default
+# coreutils (uutils) is a 116-entry hardlink farm of one ~11 MB multi-call
+# binary (+1.28 GB installed — found by the v0.2.0 boot smoke, where the slot
+# came out 1.9 GB against this 720 MB assert), so the image swaps in GNU
+# coreutils before kairos-init (see below). The slim layer still collapses
+# any remaining hardlink group into symlinks, which every pipeline stage
+# preserves, and the final layer fails the build if one survives.
 
 # renovate: docker-image
 ARG BASE_IMAGE=ubuntu:26.04
@@ -164,6 +165,27 @@ RUN printf '%s\n' \
         'path-exclude=/usr/lib/modules-load.d/zfs.conf' \
         'path-exclude=/lib/modules-load.d/zfs.conf' \
         > /etc/dpkg/dpkg.cfg.d/50sheepos-slim
+
+# GNU coreutils instead of Ubuntu's default uutils multi-call binary, swapped
+# before kairos-init so dracut and every later stage see it. Why:
+# (1) size — uutils is one ~11 MB binary behind 116 hardlinks, and the
+#     OCI -> ISO -> installer pipeline breaks hardlinks into full copies
+#     (+1.28 GB on disk, 3x the slot budget);
+# (2) Ubuntu's rust-coreutils 0.10.0 (resolute-updates, 2026-09) carries an
+#     AppArmor-motivated patch that exits with "Security violation" unless
+#     argv[0] equals the basename of /proc/self/exe — that killed the
+#     symlink-farm workaround this image used before this swap, leaving only
+#     hardlinks or full copies as valid uutils layouts;
+# (3) GNU is what kairos, k3s and sheepnet scripts are written against, and
+#     it ships one small ELF per utility, so the SBOM/Grype scan sees each.
+# coreutils-from-gnu is Ubuntu's own switch: it Provides the 'coreutils' meta
+# that kairos-init installs, so nothing later pulls uutils back. The uutils
+# packages are Essential, hence --allow-remove-essential. Net effect in the
+# bare base image: 153 MB -> 133 MB.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        --allow-remove-essential coreutils-from-gnu coreutils-from-uutils- rust-coreutils- && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install ONLY the firmware packages these machines need, before kairos-init:
 # linux-image-generic hard-depends on plain 'linux-firmware', but
@@ -461,17 +483,14 @@ RUN sh -n /usr/bin/sheepos-pick-disk && test -x /usr/bin/sheepos-pick-disk
 # (729.6 MB at v0.2.0, ~734 MB on 2026-08-31), so it is built and published
 # but not gated — the README says so.
 #
-# Hardlink farms become symlink farms: AuroraBoot's OCI unpack breaks
-# hardlinks into independent copies (mksquashfs dedup then hides the cost in
-# the ISO, and the installer rsync materializes every copy on disk — Ubuntu's
-# uutils coreutils alone inflates the installed rootfs by ~1.28 GB, 3x the
-# slot budget). Each hardlink group is collapsed to its first path as the one
-# real file plus symlinks for the rest; uutils dispatches on argv[0] basename,
-# so /usr/bin/md5sum -> farm/md5sum -> farm/<kept> behaves identically. The
-# rm/ln used inside the loop are staged as dereferenced copies first: both
-# ARE farm members, so the loop iteration that processes ln would otherwise
-# delete the only ln between its rm and its ln -s ("ln: not found", and the
-# staged copies must keep their exact basenames for argv[0] dispatch). The
+# Hardlink groups become symlinks: AuroraBoot's OCI unpack breaks hardlinks
+# into independent copies (mksquashfs dedup then hides the cost in the ISO,
+# and the installer rsync materializes every copy on disk). The big offender,
+# Ubuntu's uutils coreutils farm, is gone since the GNU swap above; what is
+# left is perl/perl5.x (one ~4 MB binary) and whatever a future package adds.
+# Each group is collapsed to its first path as the one real file plus
+# symlinks for the rest (rm and ln are standalone GNU binaries, not members
+# of any group; if that ever changes, set -e fails the build loudly). The
 # post-condition below fails the build if any hardlink GROUP (two or more
 # visible paths sharing an inode) survives — it cannot test raw st_nlink:
 # the unlinks land as overlayfs whiteouts, so the kept lower-layer file
@@ -510,12 +529,10 @@ RUN set -eu; \
     find / -xdev -type f -links +1 -printf '%D:%i\t%p\n' | sort \
         | awk -F'\t' '{ if ($1 == prev) print keep "\t" $2; else { prev = $1; keep = $2 } }' \
         > /tmp/hardlink-dups.tsv; \
-    mkdir -p /tmp/slimtools; \
-    cp -L /usr/bin/rm /usr/bin/ln /tmp/slimtools/; \
     while IFS="$(printf '\t')" read -r keep dup; do \
-        /tmp/slimtools/rm "$dup" && /tmp/slimtools/ln -s "$keep" "$dup"; \
+        rm "$dup" && ln -s "$keep" "$dup"; \
     done < /tmp/hardlink-dups.tsv; \
-    rm -rf /tmp/hardlink-dups.tsv /tmp/slimtools; \
+    rm -f /tmp/hardlink-dups.tsv; \
     ldconfig; \
     \
     [ "$INITRD_MD5" = "$(md5sum /boot/initrd | cut -d' ' -f1)" ] \
