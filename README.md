@@ -18,11 +18,14 @@ the NPU 5 blob `intel/vpu/vpu_50xx*`, Skylake `i915/skl_dmc*`, Realtek
 that can't matter on wired x86 k3s nodes are never written to disk, and the
 final layer removes the package manager and the dpkg database entirely.
 Upgrades are whole-image A/B swaps, so none of that is needed at runtime.
-An in-place upgrade peaks at **three** image slots on the 2.4 GB `COS_STATE`
-partition (active + passive + transition), so self-sustaining A/B needs each
-ext2 slot ≤ ~816 MiB — the amd64 build fails if the rootfs exceeds 720 MB
-(≈ 800 MiB/slot with measured ext2 overhead), keeping that guarantee
-mechanical rather than aspirational. Measured at merge time: ~660 MB rootfs
+An in-place upgrade peaks at **three** image slots on the `COS_STATE`
+partition (active + passive + transition). The amd64 build fails if the
+rootfs exceeds 850 MB (≈ 925 MiB/slot with measured ext2 overhead, ≈ 2.8 GiB
+for three), keeping that guarantee mechanical rather than aspirational. The
+MS-03 fleet's `COS_STATE` is 6.8 GB, so this is a headroom budget, not the
+physical limit — it was 720 MB while the fleet was M700s with a 2.4 GB
+`COS_STATE` — and a small image stays a design goal: the budget is a
+ceiling, not a target. Measured at the Ubuntu migration: ~660 MB rootfs
 → ~740 MiB/slot, smaller than the openSUSE image it replaces (733 MiB) while
 adding MS-03 hardware support. Ubuntu 26.04's default coreutils (uutils: one
 ~11 MB multi-call binary behind 116 hardlinks) is swapped for GNU coreutils at
@@ -36,7 +39,7 @@ one survives.
 |---|---|
 | Base OS | Ubuntu 26.04 LTS |
 | Kubernetes | k3s — pinned by `ARG K3S_VERSION` in `images/Dockerfile` (see [Keeping it up to date](#keeping-it-up-to-date)); each release stamps that pin into its ISO name as `k3sv<version>` |
-| Architectures | amd64 — the fleet target; the hardware contract and the 720 MB size budget are build-enforced. arm64 — built, CVE-scanned and published on every release, but **untested**: no arm64 nodes exist and the contract/size asserts do not run for it |
+| Architectures | amd64 — the fleet target; the hardware contract and the 850 MB size budget are build-enforced. arm64 — built, CVE-scanned and published on every release, but **untested**: no arm64 nodes exist and the contract/size asserts do not run for it |
 | Boot model | Kairos A/B immutable, `/etc` rebuilt each boot, config via `/oem` |
 | ISO (per release) | `kairos-ubuntu-26.04-standard-<arch>-generic-<tag>-k3sv<k3s-version>.iso` (e.g. `...-v0.2.3-k3sv1.36.3+k3s1.iso`) |
 | OCI image | `ghcr.io/new-pluto/sheepos:<tag>` (multi-arch), `:<tag>-amd64`, `:<tag>-arm64`, `:latest` |
@@ -123,7 +126,7 @@ merge:
 | Kairos Factory Action | `uses: ...reusable-factory.yaml@<ref>` in both workflows | automerge non-major |
 | AuroraBoot | `auroraboot_version:` in both workflows (`# renovate:` annotation) | automerge non-major |
 | Ubuntu | `ARG BASE_IMAGE` default in `images/Dockerfile` (single source of truth — `build.yaml` reads the ARG at runtime) | dashboard approval, LTS tags only |
-| k3s | `ARG K3S_VERSION` in `images/Dockerfile` (`# renovate:` annotation) | human merge — must respect sheepnet's Cilium compatibility floor |
+| k3s | `ARG K3S_VERSION` in `images/Dockerfile` (`# renovate:` annotation) | human merge. Patch releases of the pinned minor arrive as ordinary PRs; a new **minor** (or major) needs Dependency Dashboard approval — it must respect sheepnet's Cilium compatibility floor and the Kubernetes support of everything the cluster runs |
 
 Bump PRs come from the Mend Renovate app (installed on the New-Pluto org),
 which also digest-pins the workflow `uses:` refs; GitHub's Dependabot
@@ -135,7 +138,11 @@ sheepnet's SUC rollout gates what actually reaches nodes.
 Ubuntu security patches need no pin change at all — packages are fetched at
 build time, so **cut a release roughly monthly** (or after a relevant CVE) to
 pick them up. k3s bumps must respect sheepnet's Cilium compatibility floor and
-ideally match what the cluster is being upgraded to.
+ideally match what the cluster is being upgraded to: `main` should always be
+on the Kubernetes minor the next release is meant to ship, because a release
+tag ships whatever `main` pins. (`main` briefly carried 1.37.1 from
+2026-10-21; it was re-pinned to the 1.36 line on 2026-11-11 before any
+release was cut, since the cluster's CNI and storage did not yet list 1.37.)
 
 ## Customizing the image
 
@@ -149,7 +156,8 @@ Edit `images/Dockerfile`:
 - **Everything else** (tools, configs baked into the image): add layers *after*
   kairos-init but **before the final slim step** (which deletes the package
   manager, so it must stay last). Watch the size budget assert — it exists so
-  the A/B upgrade path on the 2.4 GB `COS_STATE` never regresses.
+  the A/B upgrade path on `COS_STATE` never regresses, and so the image
+  stays small by default.
 - **Per-cluster/node config** (k3s args, users, network) does **not**
   belong here — that stays in sheepnet's cloud-config templates and `/oem`.
   SheepOS is the generic OS; sheepnet is the cluster personality.
