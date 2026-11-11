@@ -154,6 +154,35 @@ Edit `images/Dockerfile`:
   belong here — that stays in sheepnet's cloud-config templates and `/oem`.
   SheepOS is the generic OS; sheepnet is the cluster personality.
 
+## Serial console (Intel AMT Serial-over-LAN)
+
+The MS-03 nodes are only ever watched remotely, over the AMT SOL UART — a
+PCI 16550A at I/O `0x4020` that Linux enumerates as `ttyS4`. Three pieces
+make that console a complete boot record:
+
+- **Kernel console** — `console=ttyS4,115200n8` in `/etc/cos/bootargs.cfg`
+  (travels inside the image).
+- **Console loglevel** — `/usr/lib/sysctl.d/60-sheepos-console.conf` sets
+  `kernel.printk = 7 4 1 7`, overriding Ubuntu's `4 4 1 7`, which otherwise
+  silences everything below KERN_ERR about 3 s into the initrd. The drop-in
+  is baked into the initrd too (build-asserted).
+- **GRUB menu** — `/usr/bin/sheepos-grub-serial` runs on every boot and keeps
+  a small snippet on `COS_STATE` (`/grub_sheepos_serial`, hooked from
+  `/grubcustom`) that points GRUB's output at the same UART. Kairos never
+  rewrites `COS_STATE`'s `grub.cfg` on upgrade, so this is the path that
+  reaches existing nodes; the menu appears on SOL from the **second** boot of
+  an image that carries the helper. The snippet is installed only while Linux
+  sees a 16550A at exactly `0x4020` and is removed otherwise.
+
+GRUB serial **input** is off by default: a GRUB that reads from a port which
+is not a real UART sees phantom keypresses, which stops the menu countdown
+and strands an unattended node at the menu. To drive the menu over SOL on a
+node (for example to pick the fallback entry), opt in once:
+
+```bash
+sudo grub2-editenv /oem/grubenv set sheepos_serial_input=yes    # undo: ...=no
+```
+
 ## Local build
 
 ```bash

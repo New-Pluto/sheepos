@@ -244,6 +244,25 @@ RUN mkdir -p /etc/dracut.conf.d /etc/systemd/system/systemd-networkd-wait-online
     printf 'install_items+=" /etc/systemd/system/systemd-networkd-wait-online.service.d/10-any.conf "\n' \
         > /etc/dracut.conf.d/10-sheepos-networkd-any.conf
 
+# Keep kernel messages on the console after early boot (sheepos #39). Ubuntu's
+# procps ships /usr/lib/sysctl.d/55-console-messages.conf with
+# "kernel.printk = 4 4 1 7"; systemd-sysctl applies it ~3 s into the INITRD
+# and again in the rootfs, after which only KERN_ERR and worse reach the
+# consoles — the AMT Serial-over-LAN capture (console=ttyS4, see bootargs
+# below) went silent from "Starting systemd-journald" until the login prompt,
+# hiding the rest of the initrd, switch-root and every warning. A later-
+# sorting drop-in restores console loglevel 7 (everything but KERN_DEBUG).
+# It lives in /usr/lib/sysctl.d, not /etc: dracut's systemd-sysctl module
+# copies /usr/lib/sysctl.d/*.conf into the initrd, where the first
+# application happens, so it MUST exist before kairos-init runs dracut (the
+# RUN after kairos-init asserts it landed). Runtime cost is negligible: a
+# node logs on the order of ten kernel lines a day once booted.
+RUN printf '%s\n' \
+        '# SheepOS: keep kernel messages on the console (AMT SOL) after early' \
+        '# boot; overrides 55-console-messages.conf. See sheepos issue #39.' \
+        'kernel.printk = 7 4 1 7' \
+        > /usr/lib/sysctl.d/60-sheepos-console.conf
+
 # Kairosify: 'install' adds kernel/initrd tooling, the k3s provider and agent;
 # 'init' wires the boot stack, builds the initrd (dracut — reading everything
 # staged above) and writes /etc/kairos-release (which drives upgrades and the
@@ -275,6 +294,125 @@ RUN printf '%s\n' \
         '      commands:' \
         '        - find /etc/systemd -xtype l -delete || true' \
         > /system/oem/90_sheepos_state_prune.yaml
+
+# The console-loglevel drop-in above only works if dracut really baked it
+# into the initrd (first application is there) — fail the build otherwise.
+RUN lsinitrd /boot/initrd | grep -q 'usr/lib/sysctl.d/60-sheepos-console.conf' \
+        || { echo "FATAL: 60-sheepos-console.conf missing from /boot/initrd"; exit 1; }
+
+# GRUB menu on the AMT Serial-over-LAN console (sheepos #39). Kairos'
+# grub.cfg does `insmod serial` but never configures a serial terminal, so
+# the menu, the active/passive choice and any boot-assessment fallback are
+# invisible over AMT. Kairos does NOT rewrite COS_STATE's grub.cfg on
+# upgrade, but that grub.cfg sources /grubcustom (found by file search; on
+# COS_STATE, where Kairos' own 08_grub.yaml already hooks boot assessment
+# into it) — so the terminal setup is delivered the same way: a snippet file
+# on COS_STATE plus a hook appended to /grubcustom. This helper runs from the
+# `boot` stage on every boot of the installed system and converges that
+# state, so fresh installs and upgraded nodes both get it; it only touches
+# COS_STATE when something actually has to change. Consequence: the menu
+# shows up on SOL from the SECOND boot of an image that carries this.
+#
+# Safety, in order of importance:
+#   - Hardware-gated. The AMT SOL UART is a PCI 16550A (00:16.3) at I/O
+#     0x4020 on the MS-03 — not a legacy COM port, so GRUB must be given the
+#     port address. The snippet is installed only while Linux sees a 16550A
+#     at exactly that port, and REMOVED if that ever stops being true (other
+#     hardware, a VM, SOL disabled in MEBx, a BIOS that moves the BAR).
+#   - Output-only by default. With serial INPUT enabled, a GRUB reading from
+#     a port that is not a real UART sees garbage keypresses, which cancels
+#     the menu countdown and leaves an unattended node sitting at the menu.
+#     The hardware gate is only re-evaluated on a successful boot, so input
+#     is opt-in per node:
+#         grub2-editenv /oem/grubenv set sheepos_serial_input=yes
+#     (grub.cfg loads that env file before /grubcustom is sourced).
+#   - The menu timeout is left at Kairos' 10 s.
+COPY --chmod=0755 <<'GRUBSERIAL' /usr/bin/sheepos-grub-serial
+#!/bin/sh
+# SheepOS: converge the GRUB serial-terminal hook on COS_STATE (issue #39).
+# Idempotent; run from the `boot` stage. The three variables below exist so
+# the logic can be exercised against a scratch directory.
+set -eu
+
+STATE="${SHEEPOS_STATE_DIR:-/run/initramfs/cos-state}"
+SERINFO="${SHEEPOS_SERIAL_INFO:-/proc/tty/driver/serial}"
+REMOUNT="${SHEEPOS_REMOUNT:-yes}"
+
+SNIPPET="$STATE/grub_sheepos_serial"
+HOOK="$STATE/grubcustom"
+
+# Live ISO, recovery and UKI boots have no COS_STATE mounted here.
+if [ "$REMOUNT" = "yes" ]; then
+    mountpoint -q "$STATE" || exit 0
+else
+    [ -d "$STATE" ] || exit 0
+fi
+
+WANT="$(mktemp)"
+trap 'rm -f "$WANT"' EXIT
+cat > "$WANT" <<'SNIPPET_EOF'
+# Written by /usr/bin/sheepos-grub-serial (SheepOS). Do not edit: it is
+# rewritten or removed on every boot to match the hardware.
+serial --port=0x4020 --speed=115200 --word=8 --parity=no --stop=1
+terminal_output console serial
+if [ "${sheepos_serial_input}" = "yes" ]; then
+  terminal_input console serial
+fi
+SNIPPET_EOF
+
+uart_present=no
+if grep -q 'uart:16550A port:00004020 ' "$SERINFO" 2>/dev/null; then
+    uart_present=yes
+fi
+
+need=no
+if [ "$uart_present" = "yes" ]; then
+    cmp -s "$WANT" "$SNIPPET" || need=yes
+    grep -q 'grub_sheepos_serial' "$HOOK" 2>/dev/null || need=yes
+else
+    # The hook stays (it is a no-op without the snippet); only the snippet goes.
+    [ ! -e "$SNIPPET" ] || need=yes
+fi
+[ "$need" = "yes" ] || exit 0
+
+if [ "$REMOUNT" = "yes" ]; then
+    mount -o remount,rw "$STATE"
+    trap 'rm -f "$WANT"; mount -o remount,ro "$STATE"' EXIT
+fi
+
+if [ "$uart_present" = "yes" ]; then
+    cp "$WANT" "$SNIPPET.new"
+    chmod 0644 "$SNIPPET.new"
+    mv -f "$SNIPPET.new" "$SNIPPET"
+    if ! grep -q 'grub_sheepos_serial' "$HOOK" 2>/dev/null; then
+        cat >> "$HOOK" <<'HOOK_EOF'
+set sheepos_serial="/grub_sheepos_serial"
+search --no-floppy --file --set=sheepos_serial_blk "${sheepos_serial}"
+if [ "${sheepos_serial_blk}" ]; then
+   source "(${sheepos_serial_blk})${sheepos_serial}"
+fi
+HOOK_EOF
+    fi
+    echo "sheepos-grub-serial: serial terminal hook installed on COS_STATE"
+else
+    rm -f "$SNIPPET"
+    echo "sheepos-grub-serial: no 16550A at I/O 0x4020, snippet removed"
+fi
+sync
+GRUBSERIAL
+
+# Syntax-gate the helper, then wire it into the `boot` stage. `|| true`: a
+# missing GRUB serial menu is cosmetic, a failed boot stage is not.
+RUN sh -n /usr/bin/sheepos-grub-serial && test -x /usr/bin/sheepos-grub-serial && \
+    printf '%s\n' \
+        'name: "SheepOS: GRUB menu on the AMT SOL serial console"' \
+        'stages:' \
+        '  boot:' \
+        '    - name: "Converge the GRUB serial terminal hook on COS_STATE"' \
+        '      if: grep -vq "rd.immucore.uki" /proc/cmdline' \
+        '      commands:' \
+        '        - /usr/bin/sheepos-grub-serial || true' \
+        > /system/oem/91_sheepos_grub_serial.yaml
 
 # Kernel cmdline, appended to every installed-system GRUB entry via
 # /etc/cos/bootargs.cfg (which travels INSIDE the image — upgrades never
