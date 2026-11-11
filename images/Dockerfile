@@ -70,6 +70,34 @@ ARG BASE_IMAGE=ubuntu:26.04
 
 FROM quay.io/kairos/kairos-init:v4.5.0 AS kairos-init
 
+# UPX, used once in the kairosify RUN below to pack two Kairos binaries and
+# never shipped: only the static upx binary is bind-mounted into that RUN.
+# Upstream's static release, pinned by version AND per-arch sha256 — a
+# Renovate bump of UPX_VERSION fails this stage until both sums are updated
+# by hand (sha256 of upx-<version>-<arch>_linux.tar.xz from the release).
+FROM ${BASE_IMAGE} AS upx
+ARG TARGETARCH
+# renovate: datasource=github-releases depName=upx/upx
+ARG UPX_VERSION=v5.3.0
+ARG UPX_SHA256_AMD64=79cea8a50b6fa102d10c7b79a419cd77dead3cc2d78661de2dc5e5815dc505c1
+ARG UPX_SHA256_ARM64=2a4afa860ac7aa6968f88df7841823746e5d00ba56affdf9342c2f5254fb776f
+RUN set -eu; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl xz-utils; \
+    case "${TARGETARCH:-amd64}" in \
+        amd64) sum="${UPX_SHA256_AMD64}" ;; \
+        arm64) sum="${UPX_SHA256_ARM64}" ;; \
+        *) echo "FATAL: no UPX checksum for ${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    name="upx-${UPX_VERSION#v}-${TARGETARCH:-amd64}_linux"; \
+    curl -fsSL -o /tmp/upx.tar.xz \
+        "https://github.com/upx/upx/releases/download/${UPX_VERSION}/${name}.tar.xz"; \
+    echo "${sum}  /tmp/upx.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/upx.tar.xz -C /tmp; \
+    install -m 0755 "/tmp/${name}/upx" /usr/local/bin/upx; \
+    /usr/local/bin/upx --version | head -n 1
+
 FROM ${BASE_IMAGE}
 
 ARG TARGETARCH
@@ -251,6 +279,22 @@ RUN mkdir -p /etc/dracut.conf.d /etc/systemd/system/systemd-networkd-wait-online
     printf 'install_items+=" /etc/systemd/system/systemd-networkd-wait-online.service.d/10-any.conf "\n' \
         > /etc/dracut.conf.d/10-sheepos-networkd-any.conf
 
+# No boot splash (Kairos >= v4.4.0 animates a logo on tty1 from the initramfs
+# to the login prompt). These are headless nodes watched over AMT SOL, and the
+# splash works against exactly what sheepos #39 fixed:
+#   - kairos-init's 99-immucore.conf adds the kairos-splash dracut module,
+#     whose immucore.service.d/10-quiet.conf moves immucore's output from the
+#     console to the journal — in the initrd, where the journal is not
+#     readable from outside;
+#   - /etc/cos/bootargs.cfg gains `splash` plus `quiet` on every non-recovery
+#     entry, which holds the kernel console at loglevel 4 until the sysctl
+#     drop-in below lifts it ~3 s in, and makes systemd print failures only.
+# Omit the dracut module here (omit beats add in dracut, whatever the file
+# order) so it never reaches the initrd; the two cmdline tokens are stripped
+# after kairos-init has written bootargs.cfg. Both are build-asserted.
+RUN printf 'omit_dracutmodules+=" kairos-splash "\n' \
+        > /etc/dracut.conf.d/03-sheepos-no-splash.conf
+
 # Keep kernel messages on the console after early boot (sheepos #39). Ubuntu's
 # procps ships /usr/lib/sysctl.d/55-console-messages.conf with
 # "kernel.printk = 4 4 1 7"; systemd-sysctl applies it ~3 s into the INITRD
@@ -277,11 +321,57 @@ RUN printf '%s\n' \
 # kairos-ubuntu-26.04-standard-amd64-generic-<VERSION>-k3sv<K3S_VERSION>.iso).
 # k3s is hardcoded on purpose: SheepOS is by definition a k3s node image, so
 # the pin lives here rather than in workflow inputs.
+#
+# kairos-init v4 (the Kairos monorepo) defaults are kept as shipped, including
+# CIS Level 1 hardening (auditd with immutable rules, faillock, pwquality,
+# umask 027, /etc/sysctl.d/99-kairos-cis.conf). `--skip-step cisHardening` on
+# both invocations is the build-time opt-out. Independent of that step, v4's
+# immucore mounts /tmp and /dev/shm noexec — nothing in this image or in
+# sheepnet's cloud-config executes from either.
+#
+# UPX, in the SAME layer as kairos-init so the unpacked copies never reach an
+# image layer: since v4 the Kairos Go binaries ship unpacked (v0.17's provider
+# was UPX-packed upstream) — agent-provider-kairos 77.6 MB and
+# kairos-installer 22.1 MB, together 13% of the rootfs. upx -9 brings them
+# to ~23.1 + ~7.4 MB. /usr/bin/kairos (33.5 MB: agent, immucore, kcrypt
+# as one multi-call binary behind symlinks) is deliberately NOT packed: it is
+# the initrd's immucore, where a decompression stub is one more thing that can
+# fail before any console is useful, and a packed Go binary hides its build
+# info from the Grype scan — the agent and immucore stay visible to it, as
+# they were before v4. Neither packed binary is in the initrd, so packing
+# after the init stage leaves /boot/initrd untouched. `upx -t` verifies both.
+# Runtime: the UPX stub unpacks into a memfd (memfd_create with MFD_EXEC), not
+# a file under /tmp or /dev/shm, so the noexec mounts above do not affect it
+# (verified: both run with /tmp and /dev/shm mounted noexec) — but a future
+# `vm.memfd_noexec=2` sysctl would. Cost: the provider starts in ~0.3 s
+# instead of ~0.03 s, and it runs a handful of times per boot. That is why
+# this is -9 and not --lzma: LZMA saves another 5.5 MB but takes ~1.2 s per
+# start.
 RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
+    --mount=type=bind,from=upx,src=/usr/local/bin/upx,dst=/usr/local/bin/upx \
     /kairos-init -l debug -s install -m "${MODEL}" -t "${TRUSTED_BOOT}" \
         -p k3s --provider-k3s-version "${K3S_VERSION}" --version "${VERSION}" && \
     /kairos-init -l debug -s init -m "${MODEL}" -t "${TRUSTED_BOOT}" \
-        -p k3s --provider-k3s-version "${K3S_VERSION}" --version "${VERSION}"
+        -p k3s --provider-k3s-version "${K3S_VERSION}" --version "${VERSION}" && \
+    for b in /system/providers/agent-provider-kairos /system/installer/kairos-installer; do \
+        [ -f "$b" ] && [ ! -L "$b" ] \
+            || { echo "FATAL: $b is not a regular file (kairos-init layout changed?)"; exit 1; }; \
+        upx -q -9 "$b" > /dev/null && upx -q -t "$b" > /dev/null \
+            || { echo "FATAL: upx failed on $b"; exit 1; }; \
+    done
+
+# kubelet's and the (k3s-embedded) kube-controller-manager's flexvolume
+# probers MkdirAll this directory at start. Until Kairos v4.4.0, /usr/libexec
+# was a PERSISTENT_STATE_PATH (bound read-write from COS_PERSISTENT), so the
+# first boot simply created it. v4.4.0 dropped that bind (kairos-io/kairos
+# #4304: persisting image content merged one slot's binaries into the other),
+# which leaves /usr/libexec read-only image content — a missing directory
+# would now fail with "mkdir /usr/libexec/kubernetes: read-only file system".
+# Ship it instead: MkdirAll on an existing directory succeeds on a read-only
+# filesystem. Nothing on these nodes installs a flexvolume driver (the
+# directory is empty on the live fleet), so read-only is fine.
+RUN mkdir -p /usr/libexec/kubernetes/kubelet-plugins/volume/exec && \
+    test -d /usr/libexec/kubernetes/kubelet-plugins/volume/exec
 
 # Heal persisted /etc/systemd state on upgraded nodes. /etc/systemd is a
 # Kairos PERSISTENT_STATE_PATH synced with rsync WITHOUT --delete, so unit
@@ -307,13 +397,25 @@ RUN printf '%s\n' \
 RUN lsinitrd /boot/initrd | grep -q 'usr/lib/sysctl.d/60-sheepos-console.conf' \
         || { echo "FATAL: 60-sheepos-console.conf missing from /boot/initrd"; exit 1; }
 
+# ...and the boot splash must NOT be in it (see 03-sheepos-no-splash.conf
+# above): neither the binary/unit nor the drop-in that silences immucore.
+# The rootfs enable link goes too — the unit is inert without `splash` on the
+# cmdline, but /etc/systemd is persisted without --delete, so a link that
+# ships once stays on every node forever.
+RUN ! lsinitrd /boot/initrd | grep -Eq 'kairos-splash|immucore\.service\.d/10-quiet\.conf' \
+        || { echo "FATAL: kairos-splash is in /boot/initrd"; exit 1; }; \
+    rm -f /etc/systemd/system/multi-user.target.wants/kairos-splash.service
+
 # GRUB menu on the AMT Serial-over-LAN console (sheepos #39). Kairos'
 # grub.cfg does `insmod serial` but never configures a serial terminal, so
 # the menu, the active/passive choice and any boot-assessment fallback are
-# invisible over AMT. Kairos does NOT rewrite COS_STATE's grub.cfg on
-# upgrade, but that grub.cfg sources /grubcustom (found by file search; on
-# COS_STATE, where Kairos' own 08_grub.yaml already hooks boot assessment
-# into it) — so the terminal setup is delivered the same way: a snippet file
+# invisible over AMT. That grub.cfg sources /grubcustom (found by file
+# search; on COS_STATE, where Kairos' own 08_grub.yaml already hooks boot
+# assessment into it), a separate file no upgrade rewrites: before Kairos v4
+# an upgrade left COS_STATE's grub.cfg alone, and since v4.5.0 (kairos-io/
+# kairos #6028) it replaces grub.cfg, the GRUB modules and fonts there — and
+# shim + GRUB on the ESP — with the new image's, but nothing else. So the
+# terminal setup is delivered through /grubcustom: a snippet file
 # on COS_STATE plus a hook appended to /grubcustom. This helper runs from the
 # `boot` stage on every boot of the installed system and converges that
 # state, so fresh installs and upgraded nodes both get it; it only touches
@@ -450,6 +552,10 @@ RUN sh -n /usr/bin/sheepos-grub-serial && test -x /usr/bin/sheepos-grub-serial &
 #     /dev/console. The sed rewrites ONLY the generic default (the rpi/nvidia
 #     model branches carry a baud suffix and don't match); on a board
 #     without a ttyS4 the console registration simply never happens.
+#   - no `splash`, no `quiet` — Kairos >= v4.4.0 adds both for its boot
+#     animation (see 03-sheepos-no-splash.conf above); the last two sed
+#     expressions take them back out, leaving a no-op
+#     `set baseCmd="$baseCmd"` in the non-recovery branch.
 # bootargs.cfg is written by kairos-init's install stage, so this MUST run
 # after the kairosify RUN. The greps FAIL the build if the append/rewrite
 # didn't land; multipath -t proves the conf.d blacklist parses (a parse
@@ -459,7 +565,10 @@ RUN sh -n /usr/bin/sheepos-grub-serial && test -x /usr/bin/sheepos-grub-serial &
 RUN sed -i -E \
         -e 's|^([[:space:]]*set kernelcmd="[^"]*)"|\1 rd.multipath=0 multipath=off nompath net.naming-scheme=v259"|' \
         -e 's|^([[:space:]]*set baseExtraConsole=)"console=ttyS0"$|\1"console=ttyS4,115200n8"|' \
+        -e 's|^([[:space:]]*set baseCmd="console=tty1) splash |\1 |' \
+        -e 's|^([[:space:]]*set baseCmd="\$baseCmd) quiet"$|\1"|' \
         /etc/cos/bootargs.cfg && \
+    ! grep -Ev '^[[:space:]]*#' /etc/cos/bootargs.cfg | grep -Eq '(^|[" ])(splash|quiet)([" ]|$)' && \
     grep -Eq '^[[:space:]]*set kernelcmd=.*multipath=off' /etc/cos/bootargs.cfg && \
     grep -Eq '^[[:space:]]*set kernelcmd=.*net\.naming-scheme=v259' /etc/cos/bootargs.cfg && \
     grep -Eq '^[[:space:]]*set baseExtraConsole="console=ttyS4,115200n8"$' /etc/cos/bootargs.cfg && \
@@ -474,6 +583,20 @@ RUN sed -i -E \
 # build if the option ever returns.
 RUN sed -i 's/\(pam_unix\.so\)[[:space:]]\+nullok/\1/' /etc/pam.d/common-auth && \
     ! grep -q nullok /etc/pam.d/common-auth
+
+# Root never logs in over SSH. kairos-init v0.17's sshd hardening drop-in said
+# `PermitRootLogin no`; v4's 05-kairos-hardening.conf relaxes that to
+# `prohibit-password`. root has no authorized_keys on these nodes, so this is
+# not an open door — but keep the stricter setting: sshd takes the FIRST value
+# it reads for a keyword, and 04-* sorts ahead of Kairos' 05-* in the Include.
+RUN printf '%s\n' \
+        '# SheepOS: root never logs in over SSH (overrides 05-kairos-hardening.conf).' \
+        'PermitRootLogin no' \
+        > /etc/ssh/sshd_config.d/04-sheepos.conf && \
+    mkdir -p /run/sshd && \
+    ssh-keygen -q -t ed25519 -N '' -f /tmp/sshd-assert-key && \
+    sshd -T -h /tmp/sshd-assert-key | grep -qx 'permitrootlogin no' && \
+    rm -rf /tmp/sshd-assert-key /tmp/sshd-assert-key.pub /run/sshd
 
 # rpcbind: nfs-common (kept — its mount.nfs serves in-tree nfs volumes and
 # debug mounts; the planned csi-driver-nfs pins NFSv4.1 which needs no
@@ -522,7 +645,8 @@ RUN BASE_PRETTY="$(. /etc/os-release && echo "${PRETTY_NAME}")" && \
 # Install-target picker: the fleet's definition of "auto" device selection.
 # sheepnet's rendered cloud-config references it as
 #   install.device: "script:///usr/bin/sheepos-pick-disk"
-# kairos-agent (>= v2.30.0, in-image) resolves script:// at install-spec
+# kairos-agent (>= v2.30.0; in-image — since Kairos v4 a symlink to the
+# multi-call /usr/bin/kairos) resolves script:// at install-spec
 # build time — BEFORE any partitioning or cloud-config stage — executing the
 # command and using its stdout as the device; non-zero exit or empty output
 # aborts the install with nothing written. That timing is also why the script
