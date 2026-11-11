@@ -28,7 +28,14 @@
     {
       "matchDepNames": ["k3s-io/k3s"],
       "versioning": "semver-coerced",
-      "description": "k3s tags carry +k3sN build metadata; coerce for ordering. NEVER automerge: bumps must respect sheepnet's Cilium compatibility floor and ideally match what the cluster is being upgraded to."
+      "separateMinorPatch": true,
+      "description": "k3s tags carry +k3sN build metadata; coerce for ordering. NEVER automerge: bumps must respect sheepnet's Cilium compatibility floor and ideally match what the cluster is being upgraded to. separateMinorPatch splits patch releases of the pinned minor (security fixes, raised as ordinary PRs) from the next Kubernetes minor (gated by the rule below)."
+    },
+    {
+      "matchDepNames": ["k3s-io/k3s"],
+      "matchUpdateTypes": ["minor", "major"],
+      "dependencyDashboardApproval": true,
+      "description": "A Kubernetes minor is a deliberate, effectively one-way cluster upgrade (etcd minor, CNI/storage/operator support matrices) — never offer it as a routine PR. main ships whatever it pins at the next release tag, so the minor only moves when the Dependency Dashboard box is ticked on purpose."
     },
     {
       "matchDepNames": ["ubuntu"],

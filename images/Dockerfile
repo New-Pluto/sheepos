@@ -42,18 +42,25 @@
 # layer FAIL THE BUILD if the contract regresses (amd64 builds only — see
 # the note above the final layer).
 #
-# SIZE CONTRACT — COS_STATE on the M700s is 2.4 GB and an in-place upgrade
-# peaks at THREE image slots (active + passive + transition). Self-sustaining
-# A/B therefore needs each ext2 slot <= ~816 MiB used. Measured on this image:
-# a 3072 MiB ext2 slot adds ~116 MB of fs overhead over raw du, so the final
-# layer asserts du -sxb / <= 720 MB, which keeps the slot <= ~800 MiB with
-# real-world overhead — upgrades can never wedge COS_STATE on ENOSPC.
+# SIZE CONTRACT — a small image is a design goal, not just a limit: every
+# byte is flashed, kept twice per node (A/B) and pulled on each upgrade. An
+# in-place upgrade peaks at THREE image slots on COS_STATE (active + passive
+# + transition). Measured on this image: a 3072 MiB (sparse) ext2 slot adds
+# ~116 MB of fs overhead over raw du. The final layer asserts
+# du -sxb / <= 850 MB, i.e. a slot of <= ~925 MiB and <= ~2.8 GiB for three —
+# upgrades can never wedge COS_STATE on ENOSPC. COS_STATE on the MS-03 fleet
+# is a 6.8 GB partition (6725 MiB filesystem, measured 2026-11-11; slots were
+# 701 MiB each at v0.2.5), so the hard ceiling is far higher (~2.2 GiB per
+# slot). 850 MB is a deliberate headroom raise (2026-11-11) from the 720 MB
+# that the retired M700s' 2.4 GB COS_STATE dictated (three slots <= ~816 MiB
+# each); it is a ceiling, NOT a target — keep additions lean and treat any
+# unexplained growth as a regression.
 # The budget only holds if it measures what installers MATERIALIZE: the
 # artifact pipeline (AuroraBoot OCI unpack -> mksquashfs -> installer rsync)
 # breaks hardlinks into independent full copies. Ubuntu 26.04's default
 # coreutils (uutils) is a 116-entry hardlink farm of one ~11 MB multi-call
 # binary (+1.28 GB installed — found by the v0.2.0 boot smoke, where the slot
-# came out 1.9 GB against this 720 MB assert), so the image swaps in GNU
+# came out 1.9 GB against the then-720 MB assert), so the image swaps in GNU
 # coreutils before kairos-init (see below). The slim layer still collapses
 # any remaining hardlink group into symlinks, which every pipeline stage
 # preserves, and the final layer fails the build if one survives.
@@ -70,7 +77,7 @@ ARG MODEL=generic
 ARG TRUSTED_BOOT=false
 ARG VERSION
 # renovate: datasource=github-releases depName=k3s-io/k3s
-ARG K3S_VERSION=v1.37.1+k3s1
+ARG K3S_VERSION=v1.36.6+k3s1
 
 # ---------------------------------------------------------------------------
 # Everything up to the kairos-init RUN shapes what apt/dpkg install and what
@@ -478,10 +485,10 @@ RUN sh -n /usr/bin/sheepos-pick-disk && test -x /usr/bin/sheepos-pick-disk
 # the build.
 #
 # The module/firmware and size asserts run for amd64 only: the hardware
-# contract is the x86 fleet and the 720 MB budget is the M700's COS_STATE.
-# The arm64 leg has no hardware target and has never fit that budget
-# (729.6 MB at v0.2.0, ~734 MB on 2026-08-31), so it is built and published
-# but not gated — the README says so.
+# contract is the x86 fleet and the size budget is derived from its
+# COS_STATE. The arm64 leg has no hardware target and never fit the original
+# 720 MB budget (729.6 MB at v0.2.0, ~734 MB on 2026-08-31), so it is built
+# and published but not gated — the README says so.
 #
 # Hardlink groups become symlinks: AuroraBoot's OCI unpack breaks hardlinks
 # into independent copies (mksquashfs dedup then hides the cost in the ISO,
@@ -567,6 +574,6 @@ RUN set -eu; \
     SZ="$(du -sxb / 2>/dev/null | cut -f1)"; \
     echo "SheepOS rootfs: ${SZ} bytes"; \
     if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
-        [ "$SZ" -le 720000000 ] \
-            || { echo "FATAL: rootfs ${SZ} B over the 720000000 B budget (ext2 slot would exceed ~800 MiB; COS_STATE self-sustaining ceiling is ~816 MiB)"; exit 1; }; \
+        [ "$SZ" -le 850000000 ] \
+            || { echo "FATAL: rootfs ${SZ} B over the 850000000 B budget (ext2 slot would exceed ~925 MiB; see SIZE CONTRACT at the top of this file)"; exit 1; }; \
     fi
