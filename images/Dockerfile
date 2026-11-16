@@ -283,28 +283,44 @@ RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
     /kairos-init -l debug -s init -m "${MODEL}" -t "${TRUSTED_BOOT}" \
         -p k3s --provider-k3s-version "${K3S_VERSION}" --version "${VERSION}"
 
-# No cloud-provider datasource probing. kairos-init ships
-# /system/oem/00_datasource.yaml, which on EVERY boot of a node without
-# /oem/95_userdata (i.e. every SheepOS node) asks 13 cloud "providers" for
-# userdata: plain HTTP to 169.254.169.254 and to the bare DNS names
-# `metaldata` / `metadata.google.internal`, HTTPS to
-# metadata.platformequinix.com, plus any block device labelled `cidata`.
-# Whatever answers first is trusted completely: a `#!` payload runs as root
-# on the spot, a cloud-config is persisted to /oem/95_userdata and applied on
-# every later boot. Bare-metal nodes have no metadata service, so the probe
-# can only ever be answered by something that should not be answering (and
-# costs ~3 s per boot waiting for timeouts). SheepOS nodes get their config
-# from the kernel cmdline `config_url=` at install (read by kairos-agent's
-# config collector, not by this stage) and from /oem afterwards, so the whole
-# stage file goes — its other steps only migrate or act on datasource
-# userdata. The stage files are read from the rootfs, not the initrd
-# (verified: no /system/oem in /boot/initrd), so removing it here is
-# sufficient. `test -f` first: if a kairos-init bump renames or splits the
-# file, fail the build instead of silently shipping the probe again.
+# No cloud-provider datasource probing. kairos-init writes its embedded
+# /system/oem/00_datasource.yaml unconditionally (os.WriteFile per embedded
+# file; the only opt-out is `--skip-step cloudconfigs`, which drops ALL 31
+# stage files — rootfs layout, agent, network, grub — and would leave SheepOS
+# maintaining a fork of them, so it is removed here instead).
+#
+# What the file does (read from source at the versions this image ships:
+# kairos-agent v2.31.4, immucore v0.20.4, both yip v1.25.1): while
+# /oem/95_userdata does not exist — true on every SheepOS node — it runs yip's
+# `datasource` plugin three times per boot (rootfs.before, initramfs.before,
+# network) with 13 providers. cdrom/config-drive mount any block device
+# labelled `cidata`/`config-2`; aws/openstack/hetzner/azure/vultr/digitalocean
+# GET plain http://169.254.169.254; gcp and metaldata GET plain HTTP from the
+# DNS names metadata.google.internal and `metaldata`; packet GETs
+# https://metadata.platformequinix.com, a public host (2 s timeout each, in
+# parallel). The first answer wins and is trusted: userdata starting `#!` is
+# written out and executed as root on the spot, userdata that parses as a
+# yip config is written to /oem/95_userdata and applied on that and every
+# later boot, and provider-supplied hostname and SSH keys are applied too.
+# There is no kernel-cmdline or config switch for this outside UKI mode.
+#
+# Why deleting the file is the complete fix: the plugin only runs for a
+# stage that carries a `datasource:` key, and yip loads stages only from
+# files — /system/oem (image), /oem and /usr/local/cloud-config (node); no
+# Kairos binary synthesizes one. The file's other steps only migrate, flag or
+# apply datasource userdata; kairos-agent's installer waits on its
+# /run/.userdata_load sentinel only if the file exists. The installer's
+# `config_url=` is fetched by kairos-agent's config collector, a separate
+# code path. Stage files are read from the rootfs, not the initrd (no
+# /system/oem in /boot/initrd), so removing it after dracut ran is enough.
+#
+# Guards: `test -f` fails the build if a kairos-init bump renames or splits
+# the file; the grep fails it if a `datasource:` stage is left in the image's
+# stage and config directories.
 RUN test -f /system/oem/00_datasource.yaml && \
     rm /system/oem/00_datasource.yaml && \
-    if grep -rlE '^[[:space:]-]*datasource:|95_userdata' /system/oem; then \
-        echo "FATAL: a datasource stage is still present in /system/oem"; exit 1; \
+    if grep -rlE '^[[:space:]-]*datasource:|95_userdata' /system/oem /etc/kairos; then \
+        echo "FATAL: a datasource stage is still present in the image"; exit 1; \
     fi
 
 # Heal persisted /etc/systemd state on upgraded nodes. /etc/systemd is a
